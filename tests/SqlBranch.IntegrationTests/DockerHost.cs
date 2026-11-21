@@ -71,7 +71,10 @@ internal sealed class HostPoolDirectory : IAsyncDisposable
     {
         try
         {
-            await PoolWork.RunAsync(_runtime, DockerHost.Image, Location, "find /pool -mindepth 1 -delete", readOnly: false, CancellationToken.None);
+            // The pool chowns /pool to the engine user. Give the empty directory back to the test
+            // user, or a non-root user cannot remove it from a sticky /tmp.
+            await PoolWork.RunAsync(_runtime, DockerHost.Image, Location,
+                $"find /pool -mindepth 1 -delete && chown {HostUser.Id}:{HostUser.Group} /pool", readOnly: false, CancellationToken.None);
         }
         finally
         {
@@ -80,5 +83,28 @@ internal sealed class HostPoolDirectory : IAsyncDisposable
                 Directory.Delete(Path, recursive: true);
             }
         }
+    }
+}
+
+/// <summary>The numeric user and group of the test process, for giving files back after a container changed their owner.</summary>
+internal static class HostUser
+{
+    private static readonly Lazy<string> IdValue = new(() => Run("-u"));
+    private static readonly Lazy<string> GroupValue = new(() => Run("-g"));
+
+    public static string Id => IdValue.Value;
+
+    public static string Group => GroupValue.Value;
+
+    private static string Run(string flag)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("id", flag)
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        }) ?? throw new InvalidOperationException("Could not run id.");
+        var value = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return uint.TryParse(value, out _) ? value : throw new InvalidOperationException($"id {flag} printed '{value}'.");
     }
 }
