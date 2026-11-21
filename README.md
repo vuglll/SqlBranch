@@ -2,7 +2,9 @@
 
 **Writable, full-size SQL Server database branches in seconds, for development, tests and AI agents.**
 
-[![NuGet](https://img.shields.io/nuget/v/SqlBranch.svg)](https://www.nuget.org/packages/SqlBranch)
+[![NuGet](https://img.shields.io/nuget/v/SqlBranch.svg?label=SqlBranch)](https://www.nuget.org/packages/SqlBranch)
+[![NuGet](https://img.shields.io/nuget/v/SqlBranch.Testing.svg?label=SqlBranch.Testing)](https://www.nuget.org/packages/SqlBranch.Testing)
+[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![CI](https://github.com/vuglll/SqlBranch/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/vuglll/SqlBranch/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
