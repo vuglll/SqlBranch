@@ -130,53 +130,27 @@ code. Give each its own git worktree and its own orchestrator session. Two
 sessions must not share a pool: set a different `pool` and `port` for each,
 or run them on different machines.
 
-## Codex as an additional implementer
+## A second implementer
 
-The orchestrator can hand a task group of a second feature to OpenAI's Codex
-CLI (`brew install --cask codex`, signed in with `codex login`) while its own
-implementer works on the first. Codex replaces only the implementer step; the
-spec review, the code review and the gates stay with the Claude agents.
+The orchestrator can hand a task group of a second feature to another coding
+agent, for example OpenAI's Codex CLI, while its own implementer works on the
+first. The second agent replaces only the implementer step; the spec review,
+the code review and the gates stay the same.
 
-**How the orchestrator runs it.**
-
-```sh
-codex exec --cd <feature worktree> --sandbox workspace-write \
-  -m gpt-6.2-sol -c 'model_reasoning_effort="medium"' \
-  -o <scratch>/codex-last.txt "<prompt>"
-```
-
-- Codex works in its own git worktree, never in the orchestrator's checkout.
-- `--sandbox workspace-write` lets it edit files and run local commands in
-  that worktree only. It has no Docker, network or `git push`, and it does not
-  commit. The orchestrator rebases, runs the Docker integration tests, ticks
-  the verified tasks, commits and pushes. Full access
-  (`danger-full-access`) is not used: it removes the only boundary around an
-  unattended agent.
-- The prompt names one task group, the rules from this file and
+- It works in its own git worktree, never in the orchestrator's checkout.
+- It runs in a sandbox that can edit files and run local commands in that
+  worktree only: no Docker, no network, no `git push`, and no commits. The
+  orchestrator rebases, runs the Docker integration tests, ticks the verified
+  tasks, commits and pushes. Unrestricted modes are not used: they remove the
+  only boundary around an unattended agent.
+- The prompt names one task group and the rules from this file and
   `openspec/config.yaml` (specs are fixed, no AI attribution, no real cloud
   accounts), and asks for a final report: files changed, tests added,
   commands run and their results, and which Docker checks the orchestrator
   must run.
-- Model and effort: `-m` picks the model, and `-c 'model_reasoning_effort="medium"'`
-  sets low, medium or high (the value is a quoted TOML string). The human's choice (2026-11-19):
-
-  | Codex work | Model | Effort |
-  |---|---|---|
-  | Implementing a task group, fixing review findings | `gpt-6.2-sol` | medium |
-  | Writing a proposal, or reviewing specs or code | `gpt-6.2-astra` | medium |
-
-  A Codex review is a second opinion next to the Claude reviewer agents, not
-  a replacement for them.
-- After each Codex group the `sqlbranch-code-reviewer` agent reviews it as
-  usual, with at most two fix rounds, sent back to Codex the same way.
-
-**Usage.** The Codex CLI has no usage command, but every run records the
-plan's limits in its session log. `tools/agents/codex-usage.sh` prints the
-latest 5-hour and weekly percentages and reset times. The orchestrator checks
-it before each Codex group, as it checks its own usage, and pauses Codex at
-90% of either limit. Runs from the Codex desktop app do not record limits
-where the script can read them, so the numbers are as fresh as the last CLI
-run.
+- Its work is reviewed like any other group, with at most two fix rounds.
+  A review by a second model is a useful extra opinion, not a replacement
+  for the reviewer agent.
 
 ## Keeping the agents honest
 
