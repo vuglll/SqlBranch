@@ -96,12 +96,16 @@ internal static partial class ImageCommands
             text.Add(FormattableString.Invariant($"BACPAC package size: {size} bytes"));
         }
 
-        payload["detachedUsers"] = new JsonArray([.. progress.DetachedUsers.Select(name => (JsonNode?)JsonValue.Create(name))]);
-        payload["removedLogins"] = progress.RemovedLogins;
-        payload["removedServerObjects"] = progress.RemovedServerObjects;
-        text.Add($"Detached database users: {(progress.DetachedUsers.Count == 0 ? "none" : string.Join(", ", progress.DetachedUsers))}");
-        text.Add(FormattableString.Invariant($"Removed server logins: {progress.RemovedLogins}"));
-        text.Add(FormattableString.Invariant($"Removed server objects: {progress.RemovedServerObjects}"));
+        // A build that failed before reading the package does not know which users it would detach.
+        if (progress.DetachmentKnown)
+        {
+            payload["detachedUsers"] = new JsonArray([.. progress.DetachedUsers.Select(name => (JsonNode?)JsonValue.Create(name))]);
+            payload["removedLogins"] = progress.RemovedLogins;
+            payload["removedServerObjects"] = progress.RemovedServerObjects;
+            text.Add($"Detached database users: {(progress.DetachedUsers.Count == 0 ? "none" : string.Join(", ", progress.DetachedUsers))}");
+            text.Add(FormattableString.Invariant($"Removed server logins: {progress.RemovedLogins}"));
+            text.Add(FormattableString.Invariant($"Removed server objects: {progress.RemovedServerObjects}"));
+        }
 
         var phases = new JsonObject();
         foreach (var (phase, milliseconds) in progress.PhaseMilliseconds)

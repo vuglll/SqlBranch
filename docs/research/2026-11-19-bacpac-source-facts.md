@@ -257,3 +257,8 @@ entry at the default compression level, so the BCP data is inflated and
 deflated again. At this rate a 10 GB package would spend around 20 minutes in
 the rewrite. Copying the compressed entries unchanged (only `model.xml` and
 `Origin.xml` change) would make it bounded by disk speed.
+
+**Fixed in 0.2.2.** The rewrite now copies unchanged entries byte for byte.
+The same package with 0.2.2 from nuget.org, same Mac: rewrite 574 ms (was
+13,913 ms), import 33,139 ms, seal 3,554 ms, cleanup 1,103 ms; the same two
+users detached and two logins removed, and the same 1.07 GiB image.

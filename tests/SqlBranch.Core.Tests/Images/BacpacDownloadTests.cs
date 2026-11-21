@@ -159,6 +159,8 @@ public sealed class BacpacDownloadTests
         {
             Assert.Equal(["lookup", "verify engine", "name lock", "image exists"], fixture.Trace);
         }
+        Assert.DoesNotContain("detachedUsers", run.Out, StringComparison.Ordinal);
+        Assert.DoesNotContain("removedLogins", run.Out, StringComparison.Ordinal);
         fixture.NoPublication();
     }
 

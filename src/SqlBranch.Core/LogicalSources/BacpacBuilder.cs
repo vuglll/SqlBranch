@@ -157,7 +157,11 @@ public sealed partial class BacpacBuilder(
             await RequireSpaceAsync(engine.Id, bytes, token).ConfigureAwait(false);
 
             var importPath = scratch.Package;
-            if (needsRewrite)
+            if (!needsRewrite)
+            {
+                progress.ReportDetachment(BacpacDetachment.Empty);
+            }
+            else
             {
                 using var rewrite = progress.Measure("rewrite");
                 phase = "rewrite the package";

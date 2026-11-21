@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A BACPAC build that fails before reading the package, for example because
+  the image name already exists, no longer reports "Detached database users:
+  none" and zero counts. The detach results appear only once they are known.
+
 ## 0.2.2 (2026-11-21)
 
 The first release from the public repository.
