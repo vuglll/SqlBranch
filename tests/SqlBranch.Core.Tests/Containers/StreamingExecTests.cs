@@ -72,7 +72,9 @@ public sealed class StreamingExecTests
         Assert.Equal(GiB, total);
         Assert.Equal(0, result.ExitCode);
         Assert.True(source.LargestRead <= buffer.Length, $"A read asked for {source.LargestRead} bytes.");
-        Assert.True(allocated < 64L << 20, $"Streaming 1 GiB allocated {allocated} bytes.");
+        // GetTotalAllocatedBytes counts every thread, so tests running in parallel add to it.
+        // A buffered copy would allocate at least 1 GiB; 256 MiB leaves room for that noise.
+        Assert.True(allocated < 256L << 20, $"Streaming 1 GiB allocated {allocated} bytes.");
         var exec = Assert.Single(runtime.StreamExecs);
         Assert.Equal("sqlbranch-engine", exec.Container);
         Assert.Equal(["tar", "-cf", "-"], exec.Command);
