@@ -13,6 +13,10 @@ Restore your production-sized backup **once**. Then give every developer, every 
 > **50 GB database → new writable branch in ~0.4 s** (clone) / ~2.5 s end-to-end `branch create`, on x86-64 Linux.
 > This assumes the image already exists. Building the image is a one-time full restore that takes minutes or more (see [Building an image](#building-an-image)).
 
+![SqlBranch demo: init, a 50.78 GiB image, then a branch created in about 3.5 s, listed with 288 KiB of own data, connected and removed](https://raw.githubusercontent.com/vuglll/SqlBranch/dev/docs/demo.gif)
+
+<sub>Replay of a recorded session on x86-64 Linux with a 50.78 GiB StackOverflow2013 image. `branch create` runs at its real speed; `init` and the one-time `image build` are sped up, with their real durations shown.</sub>
+
 > **Status: 0.2, early release.** Branching, images from backups and scripts,
 > and the `SqlBranch.Testing` package are released. Cloud backup URLs, image
 > export and import, and BACPAC builds are included as **preview**: they are
