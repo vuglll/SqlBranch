@@ -9,4 +9,4 @@
 - [ ] Integration tests (`SQLBRANCH_IT=1`), pool:
 - [ ] Docs updated
 
-- [ ] I have signed the Contributor License Agreement.
+- [ ] I have signed the [Contributor License Agreement](https://github.com/vuglll/SqlBranch/blob/dev/CLA.md) (the CLA bot asks on your first pull request).

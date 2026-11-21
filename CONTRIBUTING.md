@@ -4,12 +4,15 @@ Thanks for helping. Bug reports, documentation fixes and code are all welcome.
 
 ## Contributor License Agreement
 
-Every contributor signs the SqlBranch Contributor License Agreement (CLA)
-before a pull request can be merged. A bot asks you to sign on your first pull
-request; signing once covers all later contributions. The CLA lets the
-maintainer keep the project's licensing options open, including offering it
-under terms other than Apache-2.0. You keep the copyright in your
-contribution.
+Every contributor signs the [SqlBranch Contributor License Agreement](CLA.md)
+before a pull request can be merged. On your first pull request a bot
+(CLA Assistant) comments with a link; sign there with your GitHub account.
+Signing once covers all your later contributions.
+
+You keep the copyright in your contribution. The agreement gives the
+maintainer a license to use it, including under terms other than Apache-2.0,
+so the project's licensing options stay open. If your employer has rights in
+your work, make sure you have their permission first.
 
 ## Before you start
 
