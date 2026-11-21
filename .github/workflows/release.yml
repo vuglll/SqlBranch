@@ -1,0 +1,68 @@
+name: Release
+
+# Push a tag such as v0.2.2 on main to publish that version.
+# Publishing uses NuGet trusted publishing: no API key is stored in this repository.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The environment's required reviewers approve every publish.
+    environment: nuget
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Check the tag matches the version
+        run: |
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version in Directory.Build.props." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME is not on main." >&2
+            exit 1
+          fi
+
+      - name: Build (warnings as errors)
+        run: dotnet build SqlBranch.slnx --configuration Release
+
+      - name: Unit tests
+        run: dotnet test SqlBranch.slnx --no-build --configuration Release
+
+      - name: Pack
+        run: |
+          dotnet pack src/SqlBranch.Cli --no-build --configuration Release --output artifacts
+          dotnet pack src/SqlBranch.Testing --no-build --configuration Release --output artifacts
+
+      - name: NuGet login (trusted publishing)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to nuget.org
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## "v" " {f=1; next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" artifacts/*.nupkg --title "SqlBranch $version" --notes-file notes.md --verify-tag

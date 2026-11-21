@@ -1,12 +1,10 @@
 name: CI
 
-# Automatic runs are off for now; start a run by hand from the Actions tab.
-# To turn them back on, restore the pull_request and push triggers:
-#   pull_request:
-#     branches: [dev, main]
-#   push:
-#     branches: [dev, main]
 on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
   workflow_dispatch:
 
 permissions:
@@ -18,10 +16,8 @@ concurrency:
 
 jobs:
   build-and-test:
-    # The repository variable CI_RUNS_ON picks the runner as a JSON value, for example
-    # ["self-hosted","macOS","ARM64"] for the self-hosted runner. Without it, GitHub-hosted.
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +31,39 @@ jobs:
       - name: Build (warnings as errors)
         run: dotnet build SqlBranch.slnx --no-restore --configuration Release
 
-      # Integration tests need Docker and run only when SQLBRANCH_IT=1,
-      # which this job does not set.
+      # Integration tests are skipped here: they run only with SQLBRANCH_IT=1.
       - name: Unit tests
         run: dotnet test SqlBranch.slnx --no-build --configuration Release --logger "console;verbosity=normal"
+
+  # The full Docker suite gates releases: it runs on pull requests into main
+  # (the dev-to-main release PR) and by hand from the Actions tab on any branch.
+  integration:
+    needs: build-and-test
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        pool: [loop-xfs, plain]
+    env:
+      SQLBRANCH_IT: "1"
+      SQLBRANCH_IT_IMAGE: ubuntu:24.04
+      SQLBRANCH_IT_POOL_BACKEND: ${{ matrix.pool }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install SqlPackage
+        run: |
+          dotnet tool install --global microsoft.sqlpackage
+          echo "SQLBRANCH_IT_SQLPACKAGE=$HOME/.dotnet/tools/sqlpackage" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: dotnet build SqlBranch.slnx --configuration Release
+
+      - name: Integration tests (${{ matrix.pool }} pool)
+        run: dotnet test tests/SqlBranch.IntegrationTests --no-build --configuration Release --logger "console;verbosity=normal"

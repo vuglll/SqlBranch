@@ -3,6 +3,7 @@
 **Writable, full-size SQL Server database branches in seconds, for development, tests and AI agents.**
 
 [![NuGet](https://img.shields.io/nuget/v/SqlBranch.svg)](https://www.nuget.org/packages/SqlBranch)
+[![CI](https://github.com/vuglll/SqlBranch/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/vuglll/SqlBranch/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Restore your production-sized backup **once**. Then give every developer, every pull request, every test and every AI agent its own writable copy of it in about two seconds, using almost no extra disk.

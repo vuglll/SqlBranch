@@ -41,7 +41,10 @@ SQLBRANCH_IT=1 dotnet test tests/SqlBranch.IntegrationTests -c Release
 
 `SQLBRANCH_IT_POOL_BACKEND` selects the pool (`loop-xfs` or `plain`), and
 `SQLBRANCH_IT_SQLPACKAGE` points the BACPAC tests at a SqlPackage executable.
-A full run on both pools takes one to two hours.
+A full run on both pools takes one to two hours. CI runs the build and the unit
+tests on every pull request. The integration tests on both pools run on
+release pull requests into `main`; if your change touches the engine, pools,
+images or branches, run them locally and say which pool in the pull request.
 
 ## Pull requests
 
