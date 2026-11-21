@@ -47,8 +47,9 @@ jobs:
 
       - name: Pack
         run: |
-          dotnet pack src/SqlBranch.Cli --no-build --configuration Release --output artifacts
-          dotnet pack src/SqlBranch.Testing --no-build --configuration Release --output artifacts
+          # No --no-build: packing SqlBranch.Testing builds the Core assembly it bundles.
+          dotnet pack src/SqlBranch.Cli --configuration Release --output artifacts
+          dotnet pack src/SqlBranch.Testing --configuration Release --output artifacts
 
       - name: NuGet login (trusted publishing)
         id: login
