@@ -22,6 +22,13 @@ contribution.
   `openspec/changes/` and are agreed before code is written. The roadmap is in
   [docs/roadmap.md](docs/roadmap.md).
 
+## How this project is built
+
+SqlBranch is developed mostly with AI coding agents, driven and reviewed by
+the maintainer. The workflow is in [docs/agent-workflow.md](docs/agent-workflow.md)
+and the agent definitions are in `.claude/`. You don't need any of it to
+contribute; a normal pull request is fine.
+
 ## Build and test
 
 You need the .NET 10 SDK and Docker.
