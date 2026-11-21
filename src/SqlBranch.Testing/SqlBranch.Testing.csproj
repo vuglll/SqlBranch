@@ -2,6 +2,7 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <Description>Private SQL Server database branches for automated tests.</Description>
     <PackageTags>sqlserver;database;branching;testing;integration-tests;xunit;nunit;mstest</PackageTags>
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);BundleCore</TargetsForTfmSpecificBuildOutput>
@@ -9,6 +10,7 @@
   <ItemGroup>
     <None Include="../../docs/testing.md" Pack="true" PackagePath="README.md" />
     <None Include="../../NOTICE" Pack="true" PackagePath="\" />
+    <None Include="../../docs/icon.png" Pack="true" PackagePath="\" />
     <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="../SqlBranch.Core/SqlBranch.Core.csproj" PrivateAssets="all" />
     <PackageReference Include="AWSSDK.S3" Version="4.1.2" />
