@@ -1,0 +1,191 @@
+# The engine: init, status, doctor, engine start and stop, teardown
+
+SqlBranch owns one SQL Server container, the engine, and one pool of storage
+that the engine mounts at `/pool`. These commands create, inspect and remove
+them. Every command takes `--format json` and the global options in
+`docs/cli-output.md`; the settings are in `docs/configuration.md`.
+
+The engine is for development and test use only. Never use it for production.
+
+## The commands
+
+The commands below are run as written by an integration test, on an empty
+pool, in this order. The comment after each line is the exit code the test
+expects.
+
+```sh
+sqlbranch doctor               # exit 0
+sqlbranch init                 # exit 0
+sqlbranch init                 # exit 0
+sqlbranch status               # exit 0
+sqlbranch engine stop          # exit 0
+sqlbranch engine stop          # exit 0
+sqlbranch status               # exit 3
+sqlbranch engine start         # exit 0
+sqlbranch teardown             # exit 2
+sqlbranch teardown --force     # exit 0
+sqlbranch teardown --force     # exit 3
+```
+
+### `sqlbranch init`
+
+Creates the pool and the engine, then reports them. It is safe to repeat: on
+an existing engine it creates nothing, starts the engine if it is stopped, and
+reports the same facts.
+
+What a first `init` creates, and prints before it does:
+
+1. **The pool.** By `poolBackend`:
+   - `plain` uses the `pool` directory as it is. It must be empty or already a
+     SqlBranch pool, or `init` exits 2 and changes nothing. `init` writes the
+     marker `.sqlbranch-pool` in its root and makes the engine's user the owner.
+   - `loop-xfs` creates the sparse file `/var/lib/sqlbranch/pool.xfs` of
+     `poolSize` on the container host, formats it as XFS with reflink and
+     mounts it at `/var/lib/sqlbranch/mnt`. Helpers that do this are privileged,
+     labeled `io.sqlbranch.managed=true` and removed after each step. Host space
+     is checked first (exit 3 `host_disk_full`).
+   - `auto` (the default) uses the directory when the clone probe says it can
+     share blocks, otherwise creates the managed pool.
+2. **The fallback.** Under `auto`, when the managed pool cannot be created or
+   mounted (for example the runtime refuses privileged containers), `init`
+   removes what that attempt created and uses copy mode: the `pool` directory
+   on Linux, the Docker volume `sqlbranch-pool` on Docker Desktop. It says why,
+   and exits 0. Copy mode copies every file when a branch is created. `loop-xfs`
+   never falls back: it exits 3 `pool_unavailable`.
+3. **The engine folder** `engine/` and the credentials file
+   `engine/credentials.json`, readable by the engine's user only. The
+   password is random unless `SQLBRANCH_SA_PASSWORD` gives one. It never
+   appears in output.
+4. **The `branches` folder**, in thin mode, with an 8 KiB copy-on-write extent
+   hint. By default XFS unshares 128 KiB around each written 8 KiB page; the
+   hint roughly halves the space a heavily written branch uses. If the pool
+   cannot take the hint, `init` still succeeds and prints a warning.
+5. **The engine container** `sqlbranch-engine`, labeled, publishing only
+   `127.0.0.1:14330` (or `port`). `init` waits up to 120 seconds for a login
+   (exit 3 `engine_not_ready` with the log's last lines) and records the
+   backend, pool, edition and port in container labels.
+
+The edition (`engineEdition`) is passed to the engine as `MSSQL_PID`:
+`Developer`, `StandardDeveloper` or `EnterpriseDeveloper` (the last two need
+SQL Server 2025; checked against Microsoft's edition table on 2026-11-16, see
+`docs/research/2026-11-16-mssql-pid-values.md`). For an image tag that does
+not start with a year, `init` cannot tell the version in advance. If the
+engine turns out to be older than 2025, `init` removes everything that run
+created and exits 2.
+
+If any step of a first `init` fails, `init` undoes what that run created, in
+reverse order, and exits 1 `init_failed` (or keeps the cause's exit code 2 or
+3). The engine image, edition, port, pool and password are fixed at the first
+`init`; a different value later exits 2 and names the current one.
+
+The output ends with the edition and the sentence that the engine is for
+development and test use only. The JSON has `repeated`, `engine`, `pool`
+(`location`, `backend`, `cloneMode`), `created` and `notice`.
+
+### `sqlbranch status`
+
+Reports whether the engine is running, its version and edition, the pool
+location and backend, the clone mode, the number of images and branches, and
+the pool's total, used and free bytes. It also lists anything that does not
+match: a branch folder with no database, a branch database with no folder,
+leftovers of builds, resets and image removals that are no longer running. It
+exits 1 `mismatch` when it lists any. A stopped engine exits 3
+`engine_stopped` and still prints the pool.
+
+For a running engine, `branches` includes expired branches. The JSON field
+`expiredBranches` lists their names and is empty when none have expired.
+Text output names the branches and suggests `sqlbranch branch prune`.
+Expiry alone leaves the exit code at 0.
+
+An abandoned script login appears as a `build_login` mismatch after its build
+lock is released. A subsequent image build attempts to remove it and reports
+a warning if cleanup fails or the login owns another database.
+
+A storage credential that a URL build made and could not drop (see
+[images.md](images.md#building-from-a-backup-url)) appears as a
+`build_credential` mismatch, by name only, never with its secret. The next
+`sqlbranch image build` drops it, deletes its record and the build folder, and
+`status` exits 0 again.
+
+### `sqlbranch doctor`
+
+Doctor reports the detected SqlPackage path and version in text and JSON.
+SqlPackage is needed only for `--from-bacpac`. If doctor finds no usable
+executable on PATH, it reports SqlPackage as not installed with status
+`optional` and leaves the exit code unaffected. To use BACPAC builds, install
+SqlPackage with `dotnet tool install -g microsoft.sqlpackage` or use the
+[platform downloads](https://learn.microsoft.com/en-us/sql/tools/sqlpackage/sqlpackage-download).
+Put the executable on PATH or use `doctor --sqlpackage <path>` to check a
+specific installation. If that path is missing or cannot report a version,
+doctor names the path and exits 3 with `sqlpackage_missing`.
+Verified on macOS and Linux (container), SqlPackage 170.5.96.0.
+Windows verification is a release gate for 0.3.
+[SqlPackage verification record](research/2026-11-19-bacpac-source-facts.md)
+
+Checks that Docker is reachable, the engine image is on the host, the pool is
+writable, the engine port is free or held by the engine, and free pool space.
+These checks report `pass`, `warn` or `fail`. Free space under 10 GiB warns and
+under 1 GiB fails. It also warns on a host that is not x86-64 and on copy
+mode. Doctor exits 0 when nothing fails. A failed check exits 3 with
+`docker_unavailable`, `sqlpackage_missing` or `check_failed`. Doctor works
+before `init` and creates nothing.
+
+### `sqlbranch engine start` and `sqlbranch engine stop`
+
+`engine start` remounts a managed pool that went away with a restart of
+Docker or the machine (exit 3 `pool_not_mounted` if that fails), starts the
+engine and waits for a login. `engine stop` stops it and does nothing when it
+is already stopped. Both exit 3 `not_initialized` when nothing is found.
+
+### `sqlbranch teardown --force`
+
+Removes everything SqlBranch created. Without `--force` it exits 2, names
+`--force` and removes nothing. It exits 3 `not_initialized` when no engine,
+managed pool file, `sqlbranch-pool` volume or marked pool directory exists.
+Otherwise it runs these steps, each skipping what is already gone:
+
+1. Remounts a managed pool that is not mounted.
+2. Starts the engine if it is stopped, lists and drops every database that is
+   not a system database, and prints their names. If the engine cannot start,
+   it lists the database files under `engine/data` that are not system files.
+3. Removes the engine container.
+4. In a work container that mounts only the pool, deletes `engine/`,
+   `images/`, `branches/`, `import/` (printing the backups in it), `build/`,
+   `.probe/` and, last, the marker.
+5. For `loop-xfs`, unmounts `/var/lib/sqlbranch/mnt` (and removes the empty
+   folder) and deletes `/var/lib/sqlbranch/pool.xfs`. For the Docker Desktop
+   fallback, removes the `sqlbranch-pool` volume.
+
+On a directory pool, step 4 deletes only the items listed and step 5 does
+nothing, so the directory and every other file in it, such as `readme.txt`,
+stay. Teardown deletes user databases and import backups, because they live
+inside the pool.
+
+If a step fails, `teardown` exits 1 `operation_failed`, names what is left (for
+example `/var/lib/sqlbranch/mnt and /var/lib/sqlbranch/pool.xfs` after a failed
+unmount) and the next `sqlbranch teardown --force` finishes the job, because
+the engine container, the pool file or the volume still mark SqlBranch as
+initialized. JSON: `removed` (`databases`, `databaseFiles`, `importBackups`,
+`engineContainer`, `poolFolders`, `poolFile`, `volume`) and `left`.
+
+## How later commands find the pool
+
+In order: the engine container's labels, `/var/lib/sqlbranch/pool.xfs`, the
+`sqlbranch-pool` volume, then the configured `pool` directory if it holds the
+marker. Finding any of them means SqlBranch is initialized, so an unmounted
+pool after a restart or a half-done teardown is still recognised. A volume
+named `sqlbranch-pool` that does not carry the `io.sqlbranch.managed=true`
+label is the user's own: it is not a pool, and `init`, `doctor` and
+`teardown` never write to it or delete from it.
+
+## Pool layout
+
+```
+/pool/engine/                 system databases and credentials
+/pool/images/<name>/          sealed images
+/pool/branches/<name>/        branches
+/pool/import/                 backups used without a copy
+/pool/build/<id>/             staging for one image build
+/pool/.probe/                 clone-mode probe files
+/pool/.sqlbranch-pool         pool marker
+```

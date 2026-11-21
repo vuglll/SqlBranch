@@ -1,0 +1,35 @@
+# Tasks
+
+## 1. Verify platform assumptions
+
+Tag every Docker test in these and subsequent groups as an integration test gated by `SQLBRANCH_IT=1`. Record environment, date, observed results and actual source links when available in the F4 research note. A failed spike requires revising the design before relying on it.
+
+- [ ] 1.1 Measure free bytes before and after staging, restore, masking, sealing, publish and prune on thin and copy pools with a retained base. Include local and URL backups and script growth. Inject exhaustion before staging, before restore and during growth. Verify old checksums, branch reads, cleanup, exit 1 and pool_full with measured free and known required bytes. Publish the phase table.
+- [ ] 1.2 Time a fixed read/write workload alone and with restore and masking in progress. Use a barrier inside masking to test reads, commits and an independent create before publication. Record engine, pool, workload, throughput and p50/p95 latency in both modes. Verify zero lost writes or disconnected sessions; report measured slowdown even when queries all succeed.
+- [ ] 1.3 Exercise same-pool catalog publication and retirement on directory and loop-xfs pools, including a copy-mode run. Kill the writer and restart the engine on either side of rename and at each flush boundary. Verify one complete current generation, safe release of dead locks, detectable debris, successful retry and intact branch rows after unlink. Record the crash matrix.
+- [ ] 1.4 Run a stub success and masking failure under cron, launchd, Task Scheduler and a scheduled CI job. Record working directory, tool discovery, inherited test secret handling, exit propagation and argv/log scans. Publish each verified invocation and identify unavailable platforms explicitly.
+
+## 2. Publish and inspect versions
+
+- [ ] 2.1 Add local catalog identity, high-water mark and legacy read/migration paths and the pool format fence. Run the released pre-F4 CLI against an upgraded pool and verify image rm --force exits 1 with both versions, hashes and pins intact. With fixture directories verify repeated migration, interrupted writes, identical or backward clocks, removed bases and same-name reuse. Document legacy and unknown-base handling in docs/images.md.
+- [ ] 2.2 Add --replace and --versions metadata, parser and early validation. Run CLI tests for every new invalid invocation and inherited build source/secret check with a Docker spy (zero calls for invalid local input, including --from-bacpac with --replace). Check help, regenerated agent skill and the docs/images.md synopsis.
+- [ ] 2.3 Stage a replacement under a writer reservation, reuse build preflights and cleanup, and publish after sealing. Inject errors and cancellation at restore, script, seal, final cleanup and publication. Verify exits, byte counts, old hashes and zero unowned deletions. Use a fake clock to hold create or reset across the 10-minute deadline and assert progress, catalog_busy and no publication. Test lost publication acknowledgement and cleanup failure with status and retry.
+- [ ] 2.4 Implement current and version listing, aggregate counts and status recognition of versions and interrupted work. Verify text and JSON snapshots, default list compatibility, per-version sizeBytes, noncurrent pins, concurrent builds/creates and status paths for abandoned candidates, retired files and reset workspaces. Add the new examples to docs/cli-output.md.
+
+## 3. Pin branch bases and adopt the latest image
+
+- [ ] 3.1 Persist a pin on create and show it on list. Test ordinary, explicit copy, legacy, missing, expired, offline and broken branches; interleave publish with create and verify a coherent count and one complete base. Update docs/branches.md with output from both sides of refresh.
+- [ ] 3.2 Implement CLI reset selection, missing-base guard and explicit same-name adoption. Keep plain CLI and fixture reset pinned after refresh. Assert image_not_found and --latest guidance on a removed base. Verify old and new marker rows, open connections, local edit loss on success, copy policy, labels and expiry, plus exit 2 and zero Docker calls for each invalid reset input. Document CLI and fixture behavior in docs/branches.md and docs/testing.md.
+- [ ] 3.3 Exercise preparation, drop, attach and record-write faults/cancellation, including process death. Assert pre-drop data survival, post-drop broken state and old pin, cleanup/status, recovery on retry and a prune racing each phase. Verify JSON examples and agent skill metadata reflect the destructive effect.
+
+## 4. Retire unused versions and deliver the nightly workflow
+
+- [ ] 4.1 Add image prune and --keep validation. Table-test every invalid input in the images delta against a zero-call runtime, then verify newest-n plus all pins across two names, unknown records, held locks and idempotent retries. Race prune with a paused export and verify the archived bytes survive. Document uncapped pinned copies, per-version sizes and retention examples to docs/images.md.
+- [ ] 4.2 Apply whole-name rm force protection to all generations. Inject rename, unlink and cleanup failures in prune and rm. Verify pre-retirement preservation, post-retirement unlisting, affected-branch output, exact leftover path in status and retry after partial success, including image_exists and successor ID after name reuse. Check surviving branch writes in thin and copy mode. Document recovery and partial-progress JSON.
+- [ ] 4.3 Depends on F3 (PR #18) being merged into dev. Implement image import --replace using F3 validation and F4 publication. Test an occupied name with and without --replace, bad checksum, publication timeout and concurrent export. Verify the old branch resets to its original rows, --latest adopts the imported rows and failed export preserves the last archive. Document the import handoff in docs/images.md.
+- [ ] 4.4 Add four copy-paste schedules around the same fail-fast job, with explicit executable, working directory, credential injection and failure handling (including native exit codes on Windows). Add the producer and developer flows to docs/images.md and link from README.md. Run the examples against a recording CLI; verify masking precedes export, build failure skips export, and no example exposes secrets or schedules forced removal.
+
+## 5. Integration checks
+
+- [ ] 5.1 Run a gated nightly round trip with F1's test cloud source, a masking script, F3 export/import and branch reset. Check masked rows on the consumer, pre-reset edits, failure cleanup, both clone modes and redaction of sentinel secrets across text, JSON, errors, manifests, logs and child argv. Record results in the research note.
+- [ ] 5.2 From a clean build run `dotnet clean`, `dotnet build -warnaserror`, `dotnet test` and, with Docker, `SQLBRANCH_IT=1 dotnet test`. Run the repo bench on a thin pool. Verify zero warnings, all tests green and documented bench results. Run `openspec validate add-image-refresh --strict` and `openspec validate --all --strict`; both must pass.

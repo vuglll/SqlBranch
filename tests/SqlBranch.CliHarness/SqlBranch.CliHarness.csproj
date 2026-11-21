@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/SqlBranch.Testing/SqlBranch.Testing.csproj" />
+    <ProjectReference Include="..\..\src\SqlBranch.Cli\SqlBranch.Cli.csproj" />
+  </ItemGroup>
+
+</Project>

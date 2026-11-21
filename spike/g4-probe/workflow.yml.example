@@ -1,0 +1,23 @@
+# Not active: GitHub only runs workflows under .github/workflows.
+# To use it, copy it to .github/workflows/g4-probe.yml (in this repo or a public one).
+name: G4 probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run probe
+        run: ./spike/g4-probe/probe.sh
+      - name: Engine log on failure
+        if: failure()
+        run: docker logs --tail 100 sqlbranch-probe || true

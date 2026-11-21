@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/MSTest/MSTestSample.csproj" />
+    <Project Path="samples/NUnit/NUnitSample.csproj" />
+    <Project Path="samples/Xunit/XunitSample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/SqlBranch.Cli/SqlBranch.Cli.csproj" />
+    <Project Path="src/SqlBranch.Core/SqlBranch.Core.csproj" />
+    <Project Path="src/SqlBranch.Testing/SqlBranch.Testing.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlBranch.CliHarness/SqlBranch.CliHarness.csproj" />
+    <Project Path="tests/SqlBranch.Testing.Tests/SqlBranch.Testing.Tests.csproj" />
+    <Project Path="tests/SqlBranch.Core.Tests/SqlBranch.Core.Tests.csproj" />
+    <Project Path="tests/SqlBranch.IntegrationTests/SqlBranch.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,12 @@
+SqlBranch
+Copyright 2026 SqlBranch contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The SqlBranch .NET tool and the SqlBranch.Testing package redistribute
+third-party libraries under their own licenses. They are listed in
+THIRD-PARTY-NOTICES.md.
+
+SqlBranch runs Microsoft SQL Server in a container pulled from Microsoft's
+registry at run time. SQL Server is not part of this product and is licensed
+by Microsoft under its own terms.

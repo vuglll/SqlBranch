@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Description>Private SQL Server database branches for automated tests.</Description>
+    <PackageTags>sqlserver;database;branching;testing;integration-tests;xunit;nunit;mstest</PackageTags>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);BundleCore</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../docs/testing.md" Pack="true" PackagePath="README.md" />
+    <None Include="../../NOTICE" Pack="true" PackagePath="\" />
+    <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="../SqlBranch.Core/SqlBranch.Core.csproj" PrivateAssets="all" />
+    <PackageReference Include="AWSSDK.S3" Version="4.1.2" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.30.1" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.2" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
+    <InternalsVisibleTo Include="SqlBranch.Testing.Tests" />
+    <InternalsVisibleTo Include="SqlBranch.CliHarness" />
+    <InternalsVisibleTo Include="SqlBranch.IntegrationTests" />
+  </ItemGroup>
+  <Target Name="BundleCore" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(OutputPath)SqlBranch.Core.dll" />
+      <BuildOutputInPackage Include="$(OutputPath)SqlBranch.Core.xml" Condition="Exists('$(OutputPath)SqlBranch.Core.xml')" />
+    </ItemGroup>
+  </Target>
+</Project>

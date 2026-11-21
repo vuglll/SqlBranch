@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Database files, backups and archives never belong in the repo
+*.mdf
+*.ndf
+*.ldf
+*.bak
+*.bacpac
+*.7z
+*.img
+
+# Secrets
+.sa-password
+*.env.local
+
+# .NET build output
+bin/
+obj/
+artifacts/
+*.nupkg
+TestResults/
+.sqlbranch-it-sqlpackage.*
+*.user
+.vs/
+.idea/

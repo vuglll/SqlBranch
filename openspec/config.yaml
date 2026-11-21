@@ -1,0 +1,80 @@
+schema: spec-driven
+
+context: |
+  SqlBranch gives developers, pull requests and AI agents their own writable,
+  full-size SQL Server database in seconds. It is a dev and test tool, never a
+  production one.
+
+  Vocabulary:
+  - Pool: storage that can clone files without copying them. Either a
+    directory already on a reflink file system, or an XFS file that
+    SqlBranch creates and mounts itself (the loop-xfs backend).
+  - Engine: one SQL Server container that SqlBranch creates and owns, with
+    the pool mounted at /pool. It only ever runs a development edition
+    (Developer, or Standard Developer / Enterprise Developer on 2025+).
+  - Image: a sealed, read-only set of database files with a manifest.
+  - Branch: a writable database attached to the engine. Its files are clones
+    of an image.
+  - Clone mode: "thin" when the pool can share blocks, "copy" when it cannot.
+    Every command that creates files reports the mode.
+
+  Tech:
+  - C# on .NET 10. Projects: SqlBranch.Core (all behavior), SqlBranch.Cli (the
+    `sqlbranch` dotnet tool), SqlBranch.Testing (from release 0.2).
+  - The CLI is an orchestrator. It talks to the container runtime by running
+    the `docker` command and to the engine with Microsoft.Data.SqlClient. All
+    file work on the pool happens inside the engine container, so the same
+    code runs on Linux, macOS and Windows clients.
+  - No Native AOT in 0.x. Build with warnings as errors.
+  - Tests: xUnit. Unit tests use a fake container runtime. Integration tests
+    need Docker and run only when SQLBRANCH_IT=1.
+  - License: Apache-2.0.
+
+  Conventions:
+  - Every command has text output and --format json with a schemaVersion.
+    Exit codes: 0 success, 1 operation failed, 2 usage or config error,
+    3 environment not ready.
+  - Names of images and branches: 1 to 63 characters, lowercase letters,
+    digits, hyphen, underscore, starting with a letter or digit.
+  - Secrets never go into the repository, logs, status output or test output.
+  - Follow EFDoctor and DBUDoctor conventions where this file is silent.
+  - Conventional Commits. Work merges to dev, and a release is a merge commit
+    from dev to main.
+  - The roadmap and the per-feature loop are in docs/roadmap.md. Drafts for
+    later features are in docs/feature-drafts.md.
+
+rules:
+  proposal:
+    - Name the docs/roadmap.md release the change targets and the capabilities it touches.
+    - A feature change implements exactly one row of the feature queue in docs/roadmap.md. Start from its draft in docs/feature-drafts.md and re-check the draft's facts first, because drafts age.
+    - Check the row's "Needs first" column and say how that prerequisite is met, including any spike gate result from docs/research/.
+    - Platform facts (file systems, container support, licensing) cite a source URL and the date checked.
+    - Say what the change leaves out of scope.
+  specs:
+    - Requirement statements use SHALL or MUST and stay under 500 characters, because strict validation fails above that. Split a long requirement rather than dropping detail.
+    - Every requirement has at least one scenario in WHEN/THEN form.
+    - A new capability starts with a Purpose section of at least 50 characters. A delta for an existing capability has none.
+    - Scenarios use concrete values a test can assert (names, sizes, exit codes). Storage scenarios state the clone mode they apply to.
+    - Specs describe behavior a user or script can observe. Class names, libraries and file layouts belong in design.md.
+  design:
+    - Write design.md when the change adds a pool backend, a new image source, a new external dependency, or touches the JSON output or exit codes. A small command change does not need one.
+    - Every decision lists the alternatives considered.
+    - Anything that depends on an unverified platform fact says so and names the test or spike that settles it.
+  tasks:
+    - Each task is small enough to finish and verify in one session and states how it is verified.
+    - Each task group lands its own tests and docs. Do not collect them in a final group.
+    - Integration tests that need Docker are tagged and run only when SQLBRANCH_IT=1.
+    - End with an integration group, which is a clean build with warnings as errors, all tests green, the integration suite green with Docker, and openspec validate <id> --strict passing.
+
+operations:
+  apply:
+    guidance:
+      - 'Branch from dev and use Conventional Commits, for example feat(branches): add branch reset.'
+      - Tick a task only after dotnet build has zero warnings and the tests the task names pass.
+      - Touch only the SqlBranch pool and containers SqlBranch created. Never stop, remove or exec into any other container, and never run destructive SQL against a server that is not the SqlBranch engine.
+      - If a task needs work outside this change, add a draft to docs/feature-drafts.md and continue. Do not widen the change.
+      - Commit messages and pull requests carry no AI attribution or co-author lines.
+  archive:
+    guidance:
+      - Archive only after the pull request is merged into dev.
+      - After archiving, update the release table and feature queue in docs/roadmap.md.
