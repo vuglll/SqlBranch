@@ -11,11 +11,18 @@ public sealed class BacpacBuildProgress(TimeProvider? clock = null)
     public int RemovedLogins => _detachment.RemovedLogins;
     public int RemovedServerObjects => _detachment.RemovedServerObjects;
 
+    /// <summary>True once the build knows which users it detached: after the rewrite, or when none was needed.</summary>
+    public bool DetachmentKnown { get; private set; }
+
     public long? SourceSizeBytes { get; private set; }
     public IReadOnlyDictionary<string, long> PhaseMilliseconds => _milliseconds;
     public Action<string>? Notice { get; init; }
 
-    internal void ReportDetachment(BacpacDetachment detachment) => _detachment = detachment;
+    internal void ReportDetachment(BacpacDetachment detachment)
+    {
+        _detachment = detachment;
+        DetachmentKnown = true;
+    }
 
     internal void ReportSize(long bytes)
     {
