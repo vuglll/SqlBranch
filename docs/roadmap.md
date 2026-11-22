@@ -115,6 +115,7 @@ in `docs/feature-drafts.md`.
 | F10 | `add-live-source` | 0.4 | 0.1 archived |
 | F11 | `add-isolated-branches` | 0.4 | 0.1 archived |
 | F12 | `add-podman-runtime` | 0.5 | 0.1 archived |
+| F13 | `add-ef-migrations-source` | 0.4 | 0.2 archived |
 
 **Cloud databases come first in 0.3.** F1 covers anything that can put a
 native backup in Azure Blob Storage or S3 (SQL Server on VMs, Azure SQL

@@ -35,6 +35,47 @@ Restore your production-sized backup **once**. Then give every developer, every 
 - **Safe playground for AI agents.** Let an agent run migrations and destructive queries on a branch; throw it away or `reset` it.
 - **Reproduce production issues** against production-sized data without touching production.
 
+### Test migrations on real data
+
+A migration that passes on an empty database or a 20-row seed can still fail
+in production:
+
+- adding a `NOT NULL` column fails because old rows hold NULLs,
+- a new unique index fails because the data already has duplicates,
+- a column change rewrites a 50-million-row table and holds a lock for 40 minutes.
+
+You only see that on real data. Give each pull request a branch of last
+night's production image (masked with `--post-script`) and run the migration
+there in CI:
+
+```sh
+sqlbranch branch create pr-142 --from prod --ephemeral --ttl 2h   # a full copy, in seconds
+dotnet ef database update --connection "$(sqlbranch branch conn pr-142 --quiet)"
+sqlbranch branch rm pr-142
+```
+
+### SqlBranch vs Testcontainers
+
+They solve different problems, and they work well together.
+
+| | [Testcontainers](https://dotnet.testcontainers.org/) | SqlBranch |
+|---|---|---|
+| What a test gets | A new SQL Server container, usually per test class or run, with an empty database | A branch of a prebuilt image on one long-running engine |
+| Schema and data | You create them in every run (migrations, seed scripts) | Built once into the image: a backup, SQL scripts or a BACPAC |
+| Cost of a 50 GB database | A restore in every run | One restore; each branch then takes seconds and almost no disk |
+| Best for | Small schemas, empty or small seeded databases | Realistic data volume and query plans, slow migrations or seed |
+
+If an empty database plus EF migrations and a small seed is all your tests
+need, Testcontainers is a fine choice. When the migrations get slow or the
+tests need real data, build the image once:
+
+```sh
+dotnet ef migrations script --idempotent -o db/001_schema.sql
+sqlbranch image build app --from-scripts db
+```
+
+and each test starts from that schema without running the migrations again.
+
 ## Requirements
 
 SqlBranch runs SQL Server in a **Docker** container that it creates and manages. Besides the .NET tool, everything it makes lives in Docker and in its storage pool.
