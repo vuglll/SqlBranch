@@ -314,6 +314,31 @@ need a whole instance.
 
 ---
 
+## F13 `add-ef-migrations-source` (0.4)
+
+**Why.** Many .NET teams keep their schema as Entity Framework Core migrations.
+Today they must run `dotnet ef migrations script` and build from the script
+folder; asked for on r/programiranje (2026-11-22) as the way they set up test
+databases with Testcontainers.
+
+**Behavior sketch.**
+- `sqlbranch image build app --from-ef-migrations src/App.Data` builds an image
+  from an empty database by applying the project's migrations, then runs any
+  `--post-script` files (for example a seed), and seals it like a script build.
+- Options for the startup project and the DbContext when the project has more
+  than one, matching `dotnet ef`.
+- The manifest records the project, the last migration applied and the EF Core
+  version, so `image list` shows which schema an image has.
+
+**Needs first.** 0.2 archived.
+
+**Verify before proposing.** Whether to call the `dotnet ef` tool (a dependency
+the user installs, like SqlPackage) or to load the migrations assembly
+directly; how `--idempotent` scripts behave with the script build's batch and
+restriction rules; and EF Core versions to support.
+
+---
+
 ## Follow-up from add-branching-core: a killed build can leave an image folder with no manifest
 
 **Why.** The build's shell steps run through `docker exec` and finish even when
