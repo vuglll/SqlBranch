@@ -17,6 +17,23 @@ Restore your production-sized backup **once**. Then give every developer, every 
 
 <sub>Replay of a recorded session on x86-64 Linux with a 50.78 GiB StackOverflow2013 image. `branch create` runs at its real speed; `init` and the one-time `image build` are sped up, with their real durations shown.</sub>
 
+## How it works in 30 seconds
+
+1. **One full copy per machine.** On a developer laptop, a CI runner or a
+   test server, restore a backup **once** into an *image*. Run your masking
+   scripts before the image is sealed, so no branch ever sees real personal
+   data.
+2. **Branches share that copy.** A branch is a copy-on-write clone of the
+   image's files (XFS reflink): it shares the image's blocks on disk, so
+   creating one copies only metadata. A block is copied only when the branch
+   writes to it. That is why a branch of a 50 GB database takes about 0.4 s
+   and about 300 KB, whatever the size.
+3. **One engine, many databases.** Each branch is attached as its own
+   database on one SQL Server Developer container that SqlBranch manages.
+
+SqlBranch never connects to your production server or its replicas: it works
+from a backup file you already have. Timings are measured up to 50 GB.
+
 > **Status: 0.2, early release.** Branching, images from backups and scripts,
 > and the `SqlBranch.Testing` package are released. Cloud backup URLs, image
 > export and import, and BACPAC builds are included as **preview**: they are
@@ -49,7 +66,7 @@ night's production image (masked with `--post-script`) and run the migration
 there in CI:
 
 ```sh
-sqlbranch branch create pr-142 --from prod --ephemeral --ttl 2h   # a full copy, in seconds
+sqlbranch branch create pr-142 --from prod-masked --ephemeral --ttl 2h   # a full copy, in seconds
 dotnet ef database update --connection "$(sqlbranch branch conn pr-142 --quiet)"
 sqlbranch branch rm pr-142
 ```
@@ -64,6 +81,9 @@ They solve different problems, and they work well together.
 | Schema and data | You create them in every run (migrations, seed scripts) | Built once into the image: a backup, SQL scripts or a BACPAC |
 | Cost of a 50 GB database | A restore in every run | One restore; each branch then takes seconds and almost no disk |
 | Best for | Small schemas, empty or small seeded databases | Realistic data volume and query plans, slow migrations or seed |
+
+Neon and Databricks Lakebase offer branching for Postgres as cloud services;
+SqlBranch brings the same idea to SQL Server, on your own machines.
 
 If an empty database plus EF migrations and a small seed is all your tests
 need, Testcontainers is a fine choice. When the migrations get slow or the
@@ -92,12 +112,17 @@ Run `sqlbranch doctor` to check your setup.
 dotnet tool install --global SqlBranch
 
 sqlbranch init                                       # set up the pool and engine
-sqlbranch image build prod --from-bak ./prod.bak     # slow, one-time: a full restore (minutes or more)
-sqlbranch branch create feature-123 --from prod      # fast: seconds, every time after that
+sqlbranch image build prod-masked --from-bak ./prod.bak --post-script mask.sql   # slow, one-time: restore, then mask
+sqlbranch branch create feature-123 --from prod-masked                         # fast: seconds, every time after that
 sqlbranch branch conn feature-123                    # prints the connection string
 ```
 
 Done with it? `sqlbranch branch reset feature-123` to start over, or `sqlbranch branch rm feature-123`.
+
+`mask.sql` is your own script that overwrites personal data (emails, names,
+phone numbers) before the image is sealed; see
+[Building and masking with SQL scripts](docs/images.md#building-and-masking-with-sql-scripts).
+Leave out `--post-script` only when the backup holds no personal data.
 
 The backup must be a full, single-file backup made by a SQL Server no newer
 than the engine's. `init` can take a minute the first time, because it pulls
@@ -139,7 +164,7 @@ For reference: a 14.8 GB compressed backup (StackOverflow2013) built a 50.8 GB i
 
 Tips:
 
-- **Build images on a schedule, outside working hours** (nightly or weekly), and give them dated names like `prod-2026-11-16`, so nobody waits on a restore.
+- **Build images on a schedule, outside working hours** (nightly or weekly), and give them dated names like `prod-masked-2026-11-16`, so nobody waits on a restore.
 - **Old images stay usable while a new one builds.** Existing branches aren't affected.
 - **In CI, don't build the image on every run.** Build it once on a long-lived runner, or use image export and import (preview), and only run `branch create` per job.
 
@@ -171,7 +196,7 @@ the engine password, so keep it out of test output. NUnit, MSTest and parallel
 tests are covered in [docs/testing.md](docs/testing.md); runnable projects are
 under `samples/`.
 
-## How it works
+## Concepts
 
 | Term | Meaning |
 |---|---|
