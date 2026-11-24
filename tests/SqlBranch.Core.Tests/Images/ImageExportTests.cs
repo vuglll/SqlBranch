@@ -48,7 +48,7 @@ public sealed class ImageExportTests : IDisposable
             command.Count >= 3 && command[2] == ImageCatalog.ListingScript
                 ? FakeContainerRuntime.Ok(string.Join('\n', new[]
                 {
-                    _credentialsJson is null ? null : $"SQLBRANCH_POOLCRED|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_credentialsJson))}",
+                    _credentialsJson is null ? null : $"SQLBRANCH_POOLCRED|{System.Text.Json.JsonDocument.Parse(_credentialsJson).RootElement.GetProperty("format").GetInt32()}",
                     _catalogJson is null ? null : $"SQLBRANCH_CATALOG|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_catalogJson))}",
                     _imageExists ? $"SQLBRANCH_IMAGE|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}" : null,
                 }.Where(l => l is not null)))

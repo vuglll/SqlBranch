@@ -148,6 +148,7 @@ public sealed class StatusReporter
         if (await EngineLocks.IsHeldWithoutTakingAsync(session, EngineLocks.PoolUpgrade, cancellationToken).ConfigureAwait(false))
         {
             inProgress.Add("pool upgrade is running");
+            inProgress.AddRange(listing.UpgradeTemporaryFiles.Select(f => $"pool upgrade temporary file {EngineCredentials.Directory}/{f}"));
             return;
         }
 

@@ -111,12 +111,19 @@ public sealed class ImageListRemoveTests
         return script[from..script.IndexOf('\'', from)];
     }
 
+    /// <summary>What the listing script prints for a credentials file: only the format number, 1 when there is none.</summary>
+    private static string FormatNumber(string credentialsJson)
+    {
+        using var document = JsonDocument.Parse(credentialsJson);
+        return document.RootElement.TryGetProperty("format", out var f) ? f.GetInt32().ToString(System.Globalization.CultureInfo.InvariantCulture) : "1";
+    }
+
     private string Listing()
     {
         var lines = new List<string>();
         if (_credentialsLine is not null)
         {
-            lines.Add($"SQLBRANCH_POOLCRED|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_credentialsLine))}");
+            lines.Add($"SQLBRANCH_POOLCRED|{FormatNumber(_credentialsLine)}");
         }
 
         foreach (var (name, json) in _catalogs)
@@ -468,6 +475,34 @@ public sealed class ImageListRemoveTests
 
         Assert.Equal(["shop"], json.Json.GetProperty("images").EnumerateArray().Select(i => i.GetProperty("name").GetString()!).ToArray());
         Assert.Contains("/pool/images/broken", json.Err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_listing_script_never_sends_the_credentials_file_through_stdout()
+    {
+        Assert.DoesNotContain("base64 -w0 /pool/engine/credentials.json", ImageCatalog.ListingScript, StringComparison.Ordinal);
+        _credentialsLine = """{"format":2,"engine":{"user":"sa","password":"SENTINEL-PASSWORD"}}""";
+        _world.Host.CredentialsJson = _credentialsLine;
+
+        var listing = Listing();
+
+        Assert.Contains("SQLBRANCH_POOLCRED|2", listing, StringComparison.Ordinal);
+        Assert.DoesNotContain("SENTINEL", listing, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_catalog_whose_dir_leaves_the_image_folder_is_an_unreadable_catalog()
+    {
+        UseFormat2();
+        AddImage("shop", "Shop");
+        var id = Format2Pool.VersionId("shop");
+        _catalogs["shop"] = new ImageCatalogFile("shop", id, [new ImageVersionRef(id, "../..")]).ToJson();
+        AddVersion("ok", "Ok");
+
+        var json = Json("image", "list");
+
+        Assert.Equal(["ok"], json.Json.GetProperty("images").EnumerateArray().Select(i => i.GetProperty("name").GetString()!).ToArray());
+        Assert.Contains("/pool/images/shop", json.Err, StringComparison.Ordinal);
     }
 
     [Fact]

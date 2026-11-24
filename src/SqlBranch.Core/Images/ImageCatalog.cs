@@ -49,7 +49,8 @@ public sealed class ImageCatalog
     /// <c>branch.json</c> as base64). The glob skips folders that start with a dot, such as <c>.removing-*</c>.
     /// </summary>
     public const string ListingScript =
-        "if [ -f /pool/engine/credentials.json ]; then c=$(base64 -w0 /pool/engine/credentials.json 2>/dev/null) && echo \"SQLBRANCH_POOLCRED|$c\" || echo \"SQLBRANCH_POOLCRED|unreadable\"; fi; " +
+        "if [ -f /pool/engine/credentials.json ]; then g=$(grep -m1 -o '\"format\"[[:space:]]*:[[:space:]]*[0-9]*' /pool/engine/credentials.json 2>/dev/null); " +
+        "if [ $? -ge 2 ]; then echo \"SQLBRANCH_POOLCRED|unreadable\"; else n=$(printf %s \"$g\" | tr -cd 0-9); echo \"SQLBRANCH_POOLCRED|${n:-1}\"; fi; fi; " +
         "for d in /pool/images/*/; do n=$(basename \"$d\"); " +
         "[ -f \"${d}catalog.json\" ] && echo \"SQLBRANCH_CATALOG|$n|$(base64 -w0 \"${d}catalog.json\")\"; " +
         "for v in \"${d}\"versions/*/; do [ -f \"${v}manifest.json\" ] && echo \"SQLBRANCH_VMANIFEST|$n|versions/$(basename \"$v\")|$(base64 -w0 \"${v}manifest.json\")\"; done; " +
@@ -209,7 +210,8 @@ public sealed class ImageCatalog
     {
         try
         {
-            return ImageCatalogFile.TryParse(Encoding.UTF8.GetString(Convert.FromBase64String(base64)));
+            var catalog = ImageCatalogFile.TryParse(Encoding.UTF8.GetString(Convert.FromBase64String(base64)));
+            return catalog is not null && catalog.Versions.All(v => v.Dir == "." || v.Dir == $"versions/{v.Id}") ? catalog : null;
         }
         catch (FormatException)
         {
@@ -217,22 +219,25 @@ public sealed class ImageCatalog
         }
     }
 
-    /// <summary>The format number in the credentials file, read in the engine. Only the number leaves this method.</summary>
-    private static int FormatOf(string base64, PoolLocation? pool)
+    /// <summary>
+    /// The format number the listing script extracted from the credentials file. An unreadable file counts as format 1, as
+    /// 0.2.2 never read it for <c>image list</c>.
+    /// </summary>
+    private static int FormatOf(string value, PoolLocation? pool)
     {
-        if (base64 == "unreadable")
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var format))
         {
-            throw new SqlBranchException(ErrorCodes.OperationFailed, "Could not read the pool format from the engine credentials file.");
+            return 1;
         }
 
-        try
+        if (format > EngineCredentials.NewestFormat)
         {
-            return CredentialsFile.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(base64)), pool?.ToString() ?? "in this engine").Format;
+            throw new SqlBranchException(ErrorCodes.OperationFailed,
+                $"The pool {pool?.ToString() ?? "in this engine"} uses format {format.ToString(CultureInfo.InvariantCulture)}, which this sqlbranch does not read. " +
+                "Update the sqlbranch tool and the SqlBranch.Testing package.");
         }
-        catch (FormatException)
-        {
-            throw new SqlBranchException(ErrorCodes.OperationFailed, $"The engine credentials file {(pool is null ? "in this pool" : "in " + pool)} is not valid.");
-        }
+
+        return format;
     }
 
     /// <summary>

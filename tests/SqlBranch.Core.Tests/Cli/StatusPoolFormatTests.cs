@@ -95,6 +95,9 @@ public sealed class StatusPoolFormatTests
         Assert.Empty(Kinds(run.Json));
         Assert.Contains("pool upgrade is running", run.Json.GetProperty("inProgress").EnumerateArray().Select(e => e.GetString()), StringComparer.Ordinal);
         Assert.Contains("In progress: pool upgrade is running", _world.Run("status").Out, StringComparison.Ordinal);
+        var temp = $"pool upgrade temporary file {EngineCredentials.Directory}/credentials.json.new";
+        Assert.Contains(temp, run.Json.GetProperty("inProgress").EnumerateArray().Select(e => e.GetString()), StringComparer.Ordinal);
+        Assert.Contains(temp, _world.Run("status").Out, StringComparison.Ordinal);
     }
 
     [Fact]
