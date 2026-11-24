@@ -56,7 +56,7 @@ Details:
   `0m`, `10`, `10s`, `1.5h`, `25h` and `1441m` are not. A bad value makes
   every command exit 2 with `config_error`, naming `publishWait` and where
   the value came from, before any Docker command. The usual precedence
-  applies: flag, environment variable, config files, default.
+  applies (there is no flag): environment variable, config files, default.
 - **`engineImage`, `engineEdition`, `port` and `pool`** are fixed when the
   engine is first created. A later `init` with a different value is refused.
 
