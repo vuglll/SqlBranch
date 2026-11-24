@@ -321,9 +321,22 @@ the upgrade. `image list` (`version` per row), `image export`, the name check of
 `image build` and `image import` (exit 1 `image_exists`) and the image lookup of
 `branch create` read the catalog on a format-2 pool. An image with no catalog is
 listed with `version` null, exported from its top-level files and found by its
-manifest. These read-only commands never write a catalog. A catalog that cannot
-be read is a warning and the image is not listed. On a format-1 pool every one of
-these commands keeps the 0.2.2 behavior and ignores catalogs.
+manifest. These read-only commands never write a catalog. On a format-1 pool
+these commands keep the 0.2.2 behavior and ignore catalogs.
+
+An unreadable catalog still occupies its name. On format 2, `image list` shows
+it with `version` null and `catalogReadable` false, and marks it "catalog
+unreadable" in text. Other rows have `catalogReadable` true (null on format 1).
+`status` reports a mismatch and exits 1, naming `sqlbranch image rm <name>`.
+That removal uses the usual image lock and rename, keeps the high-water mark,
+and reports `image.versions` []. Other commands using the name, including
+branch create, export, build and import, fail with exit 1 `operation_failed`,
+name the same removal command, and change no files.
+
+If the credentials file cannot be parsed and the pool contains `images/.ids`
+or any image `catalog.json`, list and export fail with exit 1
+`operation_failed`: "The engine credentials file in <pool> is not valid."
+Without that content, the format-1 fallback is unchanged.
 
 ### Version IDs
 

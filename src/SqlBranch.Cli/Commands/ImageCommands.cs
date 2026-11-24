@@ -495,12 +495,12 @@ internal static partial class ImageCommands
             var rows = listing.Images.Select(i => new[]
             {
                 i.Name,
-                i.Manifest.SourceType == "scripts" ? $"scripts ({i.Manifest.Scripts.Count.ToString(CultureInfo.InvariantCulture)} files)" : i.Manifest.BacpacFile ?? i.Manifest.BackupUrl ?? i.Manifest.BackupFile ?? "-",
-                i.Manifest.SourceDatabase,
-                new ByteSize(Math.Max(i.Manifest.TotalBytes, 1)).ToBinary(),
-                i.Manifest.BuiltAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture),
+                i.Manifest?.SourceType == "scripts" ? $"scripts ({i.Manifest!.Scripts.Count.ToString(CultureInfo.InvariantCulture)} files)" : i.Manifest?.BacpacFile ?? i.Manifest?.BackupUrl ?? i.Manifest?.BackupFile ?? "-",
+                i.Manifest?.SourceDatabase ?? "-",
+                i.Manifest is null ? "-" : new ByteSize(Math.Max(i.Manifest.TotalBytes, 1)).ToBinary(),
+                i.Manifest?.BuiltAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) ?? "-",
                 i.Branches.Count.ToString(CultureInfo.InvariantCulture),
-                i.Version ?? "-",
+                i.CatalogReadable == false ? "catalog unreadable" : i.Version ?? "-",
             }).ToList();
             string[] header = ["NAME", "SOURCE", "SOURCE DATABASE", "SIZE", "BUILT", "BRANCHES", "VERSION"];
             if (listing.PoolFormat < 2)
@@ -521,6 +521,8 @@ internal static partial class ImageCommands
             ["images"] = new JsonArray([.. listing.Images.Select(i =>
             {
                 var node = ImageJson(i.Manifest);
+                node["name"] = i.Name;
+                node["catalogReadable"] = i.CatalogReadable;
                 node["branches"] = i.Branches.Count;
                 node["branchNames"] = new JsonArray([.. i.Branches.Select(b => (JsonNode?)b)]);
                 node["version"] = i.Version;
@@ -650,35 +652,35 @@ internal static partial class ImageCommands
         new([.. files.Select(f => (JsonNode)new JsonObject { ["name"] = f.Name, ["sha256"] = f.Sha256 })]);
 
     /// <summary>The manifest's facts as the JSON of <c>image build</c> and <c>image list</c>.</summary>
-    private static JsonObject ImageJson(ImageManifest manifest) => new()
+    private static JsonObject ImageJson(ImageManifest? manifest) => new()
     {
-        ["name"] = manifest.Name,
-        ["sourceDatabase"] = manifest.SourceDatabase,
-        ["engineVersion"] = manifest.EngineVersion,
-        ["engineImage"] = manifest.EngineImage,
-        ["sizeBytes"] = manifest.TotalBytes,
-        ["files"] = new JsonArray([.. manifest.Files.Select(f => (JsonNode?)new JsonObject
+        ["name"] = manifest?.Name,
+        ["sourceDatabase"] = manifest?.SourceDatabase,
+        ["engineVersion"] = manifest?.EngineVersion,
+        ["engineImage"] = manifest?.EngineImage,
+        ["sizeBytes"] = manifest?.TotalBytes,
+        ["files"] = new JsonArray([.. (manifest?.Files ?? []).Select(f => (JsonNode?)new JsonObject
         {
             ["logicalName"] = f.LogicalName,
             ["fileName"] = f.FileName,
             ["type"] = f.Type,
             ["sizeBytes"] = f.SizeBytes,
         })]),
-        ["originalRecoveryModel"] = manifest.OriginalRecoveryModel,
-        ["sealedRecoveryModel"] = manifest.SealedRecoveryModel,
-        ["originalLogSizeBytes"] = manifest.OriginalLogSizeBytes,
-        ["logRebuilt"] = manifest.LogRebuilt,
-        ["builtAt"] = manifest.BuiltAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
-        ["backupFile"] = manifest.BackupFile,
-        ["backupUrl"] = manifest.BackupUrl,
-        ["backupSha256"] = manifest.BackupSha256,
-        ["sourceType"] = manifest.SourceType,
-        ["bacpacFile"] = manifest.BacpacFile,
-        ["bacpacSha256"] = manifest.BacpacSha256,
-        ["bacpacUrl"] = manifest.BacpacUrl,
-        ["scripts"] = ScriptJson(manifest.Scripts),
-        ["postScripts"] = ScriptJson(manifest.PostScripts),
-        ["serviceBroker"] = manifest.ServiceBroker,
-        ["ddlTriggers"] = new JsonArray([.. manifest.DdlTriggers.Select(t => (JsonNode?)t)]),
+        ["originalRecoveryModel"] = manifest?.OriginalRecoveryModel,
+        ["sealedRecoveryModel"] = manifest?.SealedRecoveryModel,
+        ["originalLogSizeBytes"] = manifest?.OriginalLogSizeBytes,
+        ["logRebuilt"] = manifest?.LogRebuilt,
+        ["builtAt"] = manifest?.BuiltAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+        ["backupFile"] = manifest?.BackupFile,
+        ["backupUrl"] = manifest?.BackupUrl,
+        ["backupSha256"] = manifest?.BackupSha256,
+        ["sourceType"] = manifest?.SourceType,
+        ["bacpacFile"] = manifest?.BacpacFile,
+        ["bacpacSha256"] = manifest?.BacpacSha256,
+        ["bacpacUrl"] = manifest?.BacpacUrl,
+        ["scripts"] = ScriptJson(manifest?.Scripts ?? []),
+        ["postScripts"] = ScriptJson(manifest?.PostScripts ?? []),
+        ["serviceBroker"] = manifest?.ServiceBroker,
+        ["ddlTriggers"] = new JsonArray([.. (manifest?.DdlTriggers ?? []).Select(t => (JsonNode?)t)]),
     };
 }

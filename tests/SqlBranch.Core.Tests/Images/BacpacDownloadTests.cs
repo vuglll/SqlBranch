@@ -569,7 +569,7 @@ public sealed class BacpacDownloadTests
 
         public void NoPublication()
         {
-            Assert.DoesNotContain(_scripts, s => s.Contains("manifest", StringComparison.Ordinal));
+            Assert.DoesNotContain(_scripts, s => s.Contains("manifest", StringComparison.Ordinal) && !s.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal));
             Assert.DoesNotContain(_scripts, s => s.Contains("bacpac.owner", StringComparison.Ordinal) &&
                 World.SqlPackageProcess.Calls.Count <= 1);
         }

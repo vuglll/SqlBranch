@@ -121,9 +121,9 @@ public sealed partial class BacpacBuilder(
         var imagePath = Quoting.Shell(ImagePaths.Image(image));
         var occupied = BacpacOwnership.AnyOf($"[ -e {imagePath} ]", $"[ -L {imagePath} ]");
         var exists = (await ownership.ShellAsync($"if {occupied}; then echo exists; fi", token).ConfigureAwait(false)).Length > 0;
-        if (!exists && credentials.Format >= 2)
+        if (credentials.Format >= 2)
         {
-            exists = await ImageCatalog.NameExistsAsync(runtime, engine.Id, image, credentials.Format, token).ConfigureAwait(false);
+            exists = await ImageCatalog.NameExistsAsync(runtime, engine.Id, image, credentials.Format, token).ConfigureAwait(false) || exists;
         }
         if (exists)
         {

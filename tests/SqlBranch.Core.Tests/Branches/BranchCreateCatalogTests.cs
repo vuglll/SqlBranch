@@ -100,4 +100,17 @@ public sealed partial class BranchCreateTests
         var json = Encoding.UTF8.GetString(Convert.FromBase64String(RecordScript().Match(_timeline.Single(l => l.Contains("base64 -d", StringComparison.Ordinal))).Groups["b64"].Value));
         Assert.DoesNotContain("imageVersion", json, StringComparison.Ordinal);
     }
+    [Fact]
+    public void Use_an_image_with_an_unreadable_catalog_refuses_create_without_writing()
+    {
+        Format2Pool.Apply(_world);
+        _catalogFile = Base64("{not json");
+        var run = Create();
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("operation_failed", ErrorCode(run.Json));
+        Assert.Contains("sqlbranch image rm shop", run.Json.GetProperty("error").GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(_timeline, l => l.Contains("mkdir", StringComparison.Ordinal) || l.Contains("base64 -d", StringComparison.Ordinal) || l.Contains("DROP DATABASE", StringComparison.Ordinal));
+        Assert.Empty(_world.Runtime.Copies);
+    }
+
 }

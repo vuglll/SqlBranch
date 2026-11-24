@@ -200,4 +200,37 @@ public sealed class BacpacBuildTests
     {
         public Task ConsumeAsync(BacpacImportTarget target, CancellationToken cancellationToken) => Task.FromException(error);
     }
+    [Fact]
+    public async Task A_bacpac_build_checks_an_unreadable_catalog_even_when_the_image_folder_exists()
+    {
+        using var tree = new TempTree();
+        var file = tree.File("shop.bacpac", "");
+        BacpacPackageTests.Write(file, "");
+        var world = new CliWorld();
+        world.WithEngine();
+        Format2Pool.Apply(world);
+        var engine = world.Runtime.Containers[ContainerLabels.EngineName] with { Id = "owned", Hostname = "test-host", PublishedPorts = ["127.0.0.1:14330"] };
+        world.Runtime.Containers[engine.Id!] = engine;
+        var scripts = new List<string>();
+        world.Runtime.ExecHandler = (_, args) =>
+        {
+            var script = args[2];
+            scripts.Add(script);
+            return FakeContainerRuntime.Ok(script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal)
+                ? "SQLBRANCH_CATALOGFILE=" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{not json"))
+                : script.Contains("echo exists", StringComparison.Ordinal) ? "exists" : "");
+        };
+        world.Connector.ScalarHandler = sql => sql.Contains("MachineName", StringComparison.Ordinal) ? "test-host" : 0;
+        var pool = PoolFinder.LocationOf(engine, world.Services().Paths);
+        var builder = new BacpacBuilder(world.Runtime, world.Connector, world.Redactor, world.SqlPackageProcess);
+        var error = await Assert.ThrowsAsync<SqlBranchException>(() => builder.BuildAsync(new FoundPool(pool, "plain", PoolSource.EngineLabels, engine),
+            14330, new ImageBuildRequest("shop", "", 0), file, file, world.Environment, tree.Root, CancellationToken.None, new BacpacBuildProgress()));
+        Assert.Equal(ErrorCodes.OperationFailed, error.Code);
+        Assert.Contains("sqlbranch image rm shop", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(scripts, s => s.Contains("mkdir", StringComparison.Ordinal) || s.Contains("rm ", StringComparison.Ordinal));
+        Assert.DoesNotContain(world.Connector.Statements, s => s.StartsWith("CREATE", StringComparison.Ordinal));
+        Assert.Empty(world.Runtime.Copies);
+        Assert.Empty(world.SqlPackageProcess.Calls);
+    }
+
 }

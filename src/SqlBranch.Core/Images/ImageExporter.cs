@@ -124,8 +124,13 @@ public sealed class ImageExporter
         var entry = listing.Images.FirstOrDefault(i => i.Name == name)
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
 
+        if (entry.CatalogReadable == false)
+        {
+            throw ImageCatalog.InvalidCatalog(name);
+        }
+
         // The files come from the folder of the same catalog entry as the manifest, never from another version's data.
-        return (entry.Manifest, entry.Directory);
+        return (entry.Manifest!, entry.Directory);
     }
 
     private ImageArchiveWriter CreateWriter(string name, ImageManifest manifest, Stream output)

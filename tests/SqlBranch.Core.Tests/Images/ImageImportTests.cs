@@ -1059,4 +1059,17 @@ public sealed partial class ImageImportTests : IDisposable
 
         public override void SetLength(long value) => throw new NotSupportedException();
     }
+    [Fact]
+    public async Task Import_of_a_name_with_an_unreadable_catalog_fails_without_writing()
+    {
+        Format2Pool.Apply(_world);
+        _paths.Add("/pool/images/shop2");
+        _catalogFileOfShop2 = Convert.ToBase64String(Encoding.UTF8.GetBytes("{not json"));
+        var error = await FailsAsync(await ValidAsync());
+        Assert.Equal(ErrorCodes.OperationFailed, error.Code);
+        Assert.Contains("sqlbranch image rm shop2", error.Message, StringComparison.Ordinal);
+        AssertNothingWasWritten();
+        Assert.Contains("/pool/images/shop2", _paths);
+    }
+
 }

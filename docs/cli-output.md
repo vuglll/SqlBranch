@@ -192,18 +192,20 @@ Mismatches: 2
 
 ## Image list and image rm on both formats
 
+`image list` adds `catalogReadable`: true on format 2, false for an unreadable catalog, and null on format 1. An unreadable catalog has `version` null and is marked "catalog unreadable" in text.
+
 `image list` adds `version` to each image: the ID of the name's current version on a format-2 pool, null on a format-1
 pool and for an image an older client wrote after the upgrade and no command has adopted yet. `image rm` adds
 `image.versions`, the IDs removed with the name; it is `[]` on a format-1 pool and for an image with no catalog.
 
 ```json
 { "command": "image list", "ok": true,
-  "images": [ { "name": "shop", "version": null, "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
+  "images": [ { "name": "shop", "version": null, "catalogReadable": null, "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
 ```
 
 ```json
 { "command": "image list", "ok": true,
-  "images": [ { "name": "shop", "version": "shop@20261201T090000000Z", "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
+  "images": [ { "name": "shop", "version": "shop@20261201T090000000Z", "catalogReadable": true, "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
 ```
 
 The first document is a format-1 pool and the second a format-2 pool. In text the format-2 table has a `VERSION`
