@@ -66,6 +66,8 @@ internal sealed class CliWorld
 
     public TimeProvider? Clock { get; set; }
 
+    public Func<TimeSpan, CancellationToken, Task>? UpgradeDelay { get; set; }
+
     public CliServices Services() => new(
         Runtime, Connector, Environment, "/work", "/home/u", ManagedPaths.Default,
         new EngineTimings { ReadyTimeout = TimeSpan.FromMilliseconds(100), PollInterval = TimeSpan.FromMilliseconds(5) },
@@ -76,7 +78,7 @@ internal sealed class CliWorld
         path => new ClientFile(Files.ContainsKey(path), Files.ContainsKey(path) && !UnreadableFiles.Contains(path), Files.GetValueOrDefault(path)), Clock,
         RealPath: path => Links.Aggregate(path, (p, link) => p == link.Key || p.StartsWith(link.Key + "/", StringComparison.Ordinal) ? link.Value + p[link.Key.Length..] : p),
         StoreFactory: (url, secrets, redactor) => ArchiveStores.Create(url, secrets,
-            new StorageOptions { Handler = url.Kind == SqlBranch.Core.Images.BackupUrlKind.S3 ? S3 : Azure, RetryDelay = TimeSpan.Zero }, redactor), SqlPackageProcess: SqlPackageProcess);
+            new StorageOptions { Handler = url.Kind == SqlBranch.Core.Images.BackupUrlKind.S3 ? S3 : Azure, RetryDelay = TimeSpan.Zero }, redactor), SqlPackageProcess: SqlPackageProcess, UpgradeDelay: UpgradeDelay);
 
     public (int Exit, string Out, string Err) Run(params string[] args)
     {

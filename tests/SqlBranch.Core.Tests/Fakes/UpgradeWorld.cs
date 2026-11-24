@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using SqlBranch.Core.Containers;
+using SqlBranch.Core.Branches;
 using SqlBranch.Core.Pools;
 
 namespace SqlBranch.Core.Tests.Fakes;
@@ -30,19 +31,29 @@ internal sealed partial class UpgradeWorld
             if (script == PoolUpgrader.EnumerationScript)
             {
                 Writes.Add("enumerate");
-                var lines = Images.Values.OrderBy(i => i.Name, StringComparer.Ordinal).Select(i =>
+                var lines = Images.Values.Where(i => !i.Name.StartsWith('.') && !i.Name.Contains('/') && (i.HasManifest || i.CatalogBase64 is not null)).OrderBy(i => i.Name, StringComparer.Ordinal).Select(i =>
                         $"SQLBRANCH_UPIMAGE|{i.Name}|{(i.HasManifest ? 1 : 0)}|{i.CatalogBase64 ?? "none"}|{i.IdFile ?? "none"}")
-                    .Concat(Branches.Order(StringComparer.Ordinal).Select(b => $"SQLBRANCH_UPBRANCH|{b}"));
+                    .Concat(Branches.Where(b => !b.StartsWith('.') && Records.ContainsKey(b)).Order(StringComparer.Ordinal).Select(b => $"SQLBRANCH_UPBRANCH|{b}"));
                 return FakeContainerRuntime.Ok(string.Join('\n', lines) + "\n");
+            }
+
+            if (script.Contains("SQLBRANCH_RECORD=", StringComparison.Ordinal))
+            {
+                var name = Regex.Match(script, @"/pool/branches/([^/]+)/branch.json").Groups[1].Value;
+                return FakeContainerRuntime.Ok("SQLBRANCH_RECORD=" + (Records.TryGetValue(name, out var json) ? Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) : "none"));
             }
 
             if (script.Contains("SQLBRANCH_MANIFEST=", StringComparison.Ordinal))
             {
-                // The manifest a branch create reads for its image (every image of this fake is Shop).
+                var name = Regex.Match(script, @"/pool/images/([^/]+)/").Groups[1].Value;
+                if (!Images.TryGetValue(name, out var image) || !image.HasManifest)
+                {
+                    return FakeContainerRuntime.Ok("SQLBRANCH_MANIFEST=none");
+                }
                 var manifest = Convert.ToBase64String(Encoding.UTF8.GetBytes(new SqlBranch.Core.Images.ImageManifest(
                     SqlBranch.Core.Images.ImageManifest.CurrentFormat, "shop", "Shop", "16.0.4125.3",
                     [new SqlBranch.Core.Images.ImageFile("Shop", "Shop.mdf", "data", 8L << 20), new SqlBranch.Core.Images.ImageFile("Shop_log", "Shop_log.ldf", "log", 524_288)],
-                    "FULL", "SIMPLE", 268_435_456, LogRebuilt: true, new DateTimeOffset(2026, 11, 16, 10, 30, 0, TimeSpan.Zero),
+                    "FULL", "SIMPLE", 268_435_456, LogRebuilt: true, image.BuiltAt,
                     "shop.bak", new string('a', 64), new Dictionary<string, string>(), CliWorld.EngineImage).ToJson()));
                 return FakeContainerRuntime.Ok("SQLBRANCH_MANIFEST=" + manifest);
             }
@@ -74,7 +85,18 @@ internal sealed partial class UpgradeWorld
 
             if (script.Contains("branch.json", StringComparison.Ordinal) && script.Contains("base64 -d", StringComparison.Ordinal))
             {
-                Writes.Add("branch");
+                var match = Regex.Match(script, @"printf %s '(?<b64>[A-Za-z0-9+/=]+)' \| base64 -d > '/pool/branches/(?<n>[^/']+)/branch\.json\.new'");
+                if (match.Success)
+                {
+                    if (FailWrite?.Invoke(script) is { } error)
+                    {
+                        return FakeContainerRuntime.Fail(1, error);
+                    }
+                    var name = match.Groups["n"].Value;
+                    Records[name] = Encoding.UTF8.GetString(Convert.FromBase64String(match.Groups["b64"].Value));
+                    Writes.Add("branch:" + name);
+                    return FakeContainerRuntime.Ok();
+                }
             }
 
             return inner(container, command);
@@ -98,11 +120,17 @@ internal sealed partial class UpgradeWorld
     public CliWorld World { get; }
 
     /// <summary>An image folder as the enumeration sees it.</summary>
-    public sealed record FakeImage(string Name, bool HasManifest, string? CatalogBase64, string? IdFile);
+    public sealed record FakeImage(string Name, bool HasManifest, string? CatalogBase64, string? IdFile)
+    {
+        public DateTimeOffset BuiltAt { get; init; } = new(2026, 11, 16, 10, 30, 0, TimeSpan.Zero);
+        public DateTimeOffset ModifiedAt { get; init; } = new(2026, 11, 30, 10, 30, 0, TimeSpan.Zero);
+    }
 
     public Dictionary<string, FakeImage> Images { get; } = [];
 
     public List<string> Branches { get; } = [];
+
+    public Dictionary<string, string> Records { get; } = [];
 
     /// <summary>Every engine script, in order.</summary>
     public List<string> Scripts { get; } = [];
@@ -115,7 +143,11 @@ internal sealed partial class UpgradeWorld
 
     public void AddImage(string name) => Images[name] = new FakeImage(name, true, null, null);
 
-    public void AddBranch(string name) => Branches.Add(name);
+    public void AddBranch(string name, string image = "shop", DateTimeOffset? createdAt = null)
+    {
+        Branches.Add(name);
+        Records[name] = new BranchRecord(image, "thin", createdAt ?? new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), new Dictionary<string, string>()).ToJson();
+    }
 
     /// <summary>The catalog the upgrade wrote for an image, or null.</summary>
     public string? CatalogOf(string name) =>

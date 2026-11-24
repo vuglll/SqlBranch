@@ -261,3 +261,12 @@ is `pool_full`. A run that is killed before the rename leaves
 /pool/.probe/                 clone-mode probe files
 /pool/.sqlbranch-pool         pool marker
 ```
+
+An upgrade binds a branch to the image's first version when its `createdAt` is
+at or after the manifest's `builtAt`; it does not use the manifest's filesystem
+modification time. An imported image keeps the archive producer's `builtAt`,
+not the local import time. If an earlier image was force-removed and replaced
+by an import built before the branch was created, the upgrade pins that branch
+to the imported version. This is also what a 0.2.2 reset would have restored.
+A branch older than the current image gets an unknown base; a branch whose
+image is gone gets a removed base. Neither can be reset to the current image.

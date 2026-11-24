@@ -53,7 +53,7 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         return last;
     }
 
-    /// <summary>The records of the branches, which task 4.2 does not touch (task 4.3 binds them).</summary>
+    /// <summary>The records of the branches, for checking that a completed rerun leaves them unchanged.</summary>
     private Task<string> BranchRecordsAsync() => Kit.InPoolAsync(
         "for f in /pool/branches/*/branch.json; do echo \"$(sha256sum \"$f\" | cut -d' ' -f1) $(stat -c %y \"$f\") $f\"; done");
 
@@ -95,7 +95,6 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         output.WriteLine("clone mode: " + await Kit.CloneModeAsync());
         Assert.Equal(1, Json(World.RunCli("status", "--format", "json")).GetProperty("poolFormat").GetInt32());
         var before = await QuietSnapshotAsync();
-        var recordsBefore = await BranchRecordsAsync();
         var loginsBefore = await LoginsAsync();
         var startedBefore = await StartedAtAsync(World);
         Assert.Contains("/data/", before, StringComparison.Ordinal);
@@ -106,13 +105,20 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         // "Data untouched by the upgrade": taken right after the command, before anything else touches the live branch files.
         var afterUpgrade = await DataSnapshotAsync();
         Assert.Equal(before, afterUpgrade);
-        Assert.Equal(recordsBefore, await BranchRecordsAsync());
         Assert.Equal(2, upgraded.GetProperty("pool").GetProperty("format").GetInt32());
         Assert.Equal(1, upgraded.GetProperty("pool").GetProperty("previousFormat").GetInt32());
         var versions = upgraded.GetProperty("images").EnumerateArray().ToDictionary(i => i.GetProperty("name").GetString()!, i => i.GetProperty("version").GetString()!);
         Assert.StartsWith("upcrm@", versions["upcrm"], StringComparison.Ordinal);
         Assert.StartsWith("upshop@", versions["upshop"], StringComparison.Ordinal);
         Assert.Matches(@"^upshop@\d{8}T\d{9}Z$", versions["upshop"]);
+        foreach (var name in new[] { "updev1", "upold1" })
+        {
+            var record = JsonDocument.Parse(await Kit.InPoolAsync($"cat /pool/branches/{name}/branch.json")).RootElement;
+            Assert.True(record.GetProperty("baseKnown").GetBoolean());
+            Assert.Equal(versions["upshop"], record.GetProperty("imageVersion").GetString());
+            Assert.Contains(name, upgraded.GetProperty("branches").GetProperty("pinned").EnumerateArray().Select(b => b.GetString()));
+        }
+        var recordsBefore = await BranchRecordsAsync();
 
         var listed = Json(World.RunCli("image", "list", "--format", "json")).GetProperty("images").EnumerateArray()
             .ToDictionary(i => i.GetProperty("name").GetString()!, i => i.GetProperty("version").GetString());
