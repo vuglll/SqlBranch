@@ -370,6 +370,38 @@ restriction rules; and EF Core versions to support.
 
 ---
 
+## F14 `add-branch-pool` (later)
+
+**Why.** `branch create` takes about 2.5 s end to end, most of it attaching
+the database, not cloning. A test suite or an agent that wants a database
+the moment it starts still waits for that. Keeping a few branches of an
+image ready, already attached, makes handing one out close to instant.
+
+**Behavior sketch.**
+- A per-image setting (for example `branchPool: { shop: 4 }`) keeps that
+  many unclaimed branches of the image's current version attached.
+- `branch create <name> --from shop` and `SqlBranchDatabase.CreateAsync`
+  claim a ready branch when one exists: rename the database, write the
+  branch record, return. Otherwise they create one as today.
+- The pool refills in the background after a claim, never blocking the
+  caller. Ready branches are hidden from `branch list` by default and
+  shown with a flag; they count toward pool space in `status`.
+- After a refresh publishes a new version, ready branches of the old
+  version are dropped and replaced; claimed branches are untouched.
+- In copy mode a ready branch costs a full copy each, so the setting is
+  refused or capped there.
+
+**Needs first.** `add-pool-format-upgrade` and `add-image-refresh`
+archived (versions, so the pool knows when it is stale).
+
+**Verify before proposing.** Where the time in `branch create` actually
+goes (clone, attach, record write) on Linux and Docker Desktop, and
+whether renaming an attached database is fast and safe with open
+connections refused. Who refills the pool when no SqlBranch process is
+running: a long-lived process, the next command, or the fixture host.
+
+---
+
 ## Follow-up from add-branching-core: a killed build can leave an image folder with no manifest
 
 **Why.** The build's shell steps run through `docker exec` and finish even when
