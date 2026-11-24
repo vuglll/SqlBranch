@@ -37,8 +37,8 @@ filtered.
 
 | Platform question | Status | Settled by |
 |---|---|---|
-| Is the credentials-file rewrite complete-old-or-complete-new at every kill point and across an engine restart? | verified on a directory pool in copy mode; loop-xfs not testable here (see below) | Task 1.1 |
-| Is a session application lock in `master` released promptly when the client is killed? | verified for a killed client process: free in about 0.1 s | Task 1.1 |
+| Is the credentials-file rewrite complete-old-or-complete-new at every kill point and across an engine restart? | verified on a directory pool in copy mode and on a loop-xfs pool in thin mode (rerun 2026-11-24, see below) | Task 1.1 |
+| Is a session application lock in `master` released promptly when the client is killed? | verified for a killed client process: free in about 0.1 s (both runs) | Task 1.1 |
 | Does 0.2.2 `image list`, `branch list` and `image export` ignore unknown fields in `branch.json`? | verified | Task 1.2 |
 
 ### Pools used
@@ -89,6 +89,39 @@ helper does. That run is discarded.
 Limits: this is a process kill (SIGKILL of the writer container). It is not a
 power-loss or kernel-crash test; the effect of `sync` on durability was not
 observable here.
+
+### 1.1 Kill matrix rerun on a loop-xfs pool (thin mode)
+
+Run 2026-11-24 on a Mac (Apple silicon) with Docker Desktop 29.9.3, engine
+image `mcr.microsoft.com/mssql/server:2022-latest` (SQL Server 16.0.4325.4
+Developer, amd64 under emulation), SqlBranch built from branch head 10bf291.
+`sqlbranch init` with `poolBackend loop-xfs`, `poolSize 4GB`: clone mode thin,
+pool file `/var/lib/sqlbranch/pool.xfs`, mount `/var/lib/sqlbranch/mnt`
+(`stat -f` reports `xfs`). Same method as the directory pool above: helper
+container as root with the mount at /pool, held after step N, `docker kill`,
+check, `docker restart sqlbranch-engine`, check, delete the temp file and
+rerun. Old content 59 bytes (format 1), new 102 bytes (format 2). Only
+SHA-256 comparisons, modes and owners were printed. The pool was removed with
+`teardown --force` afterwards.
+
+| Killed after | Temp file left | credentials.json after kill | after engine restart | rerun |
+|---|---|---|---|---|
+| 0 partial write (10 bytes) | yes, 600 0:0, 10 bytes | old, 600, 10001:0 | same, temp file still there | done, new, 600, 10001:0 |
+| 1 temp write | yes, 600 0:0, 102 bytes | old, 600, 10001:0 | same | done, new, 600, 10001:0 |
+| 2 chown | yes, 600 10001:0 | old, 600, 10001:0 | same | done, new, 600, 10001:0 |
+| 3 chmod | yes, 600 10001:0 | old, 600, 10001:0 | same | done, new, 600, 10001:0 |
+| 4 sync | yes, 600 10001:0 | old, 600, 10001:0 | same | done, new, 600, 10001:0 |
+| 5 rename | none | new, 600, 10001:0 | same | done, new, 600, 10001:0 |
+| 6 directory sync | none | new, 600, 10001:0 | same | done, new, 600, 10001:0 |
+
+Same result as the directory pool: every kill left the whole old or the whole
+new content, never a mix. The same limits apply (process kill, not power loss).
+
+Lock release on the same engine: a `sqlcmd` session took
+`sqlbranch:image:probe` and `sqlbranch:pool-upgrade` (session owner, timeout
+0) and waited; `APPLOCK_TEST` confirmed both held; the holder was killed with
+`kill -9` inside the engine container while a second session polled every
+20 ms. Both locks were free 102, 30 and 31 ms after the kill (three runs).
 
 ### 1.1 Session application locks released on client kill
 
