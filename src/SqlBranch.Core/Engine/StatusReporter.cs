@@ -115,7 +115,7 @@ public sealed class StatusReporter
         var mismatches = new List<StatusMismatch>();
         if (credentials.Format >= 2)
         {
-            var images = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location).ConfigureAwait(false);
+            var images = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
             mismatches.AddRange(images.Images.Where(i => i.CatalogReadable == false)
                 .Select(i => new StatusMismatch("image_catalog", i.Name, ImageCatalog.InvalidCatalog(i.Name).Message)));
         }

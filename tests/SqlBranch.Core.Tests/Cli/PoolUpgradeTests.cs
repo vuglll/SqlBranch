@@ -146,6 +146,14 @@ public sealed class PoolUpgradeTests
         Assert.Equal("pool_full", run.Json.GetProperty("error").GetProperty("code").GetString());
         Assert.Equal(Format1Credentials, _pool.World.Host.CredentialsJson);
         Assert.Equal(["credentials:failed"], _pool.Writes);
+
+        // The pool stays usable as format 1: status is clean and a branch can still be made (the scenario's "AND").
+        _pool.World.Host.CredentialsRewriteFailure = null;
+        var status = _pool.Run("status", "--format", "json");
+        Assert.Equal(0, status.Exit);
+        Assert.Equal(1, JsonDocument.Parse(status.Out).RootElement.GetProperty("poolFormat").GetInt32());
+        var create = _pool.Run("branch", "create", "dev5", "--from", "crm", "--format", "json");
+        Assert.True(create.Exit == 0, create.Out + create.Err);
         Assert.DoesNotContain(_pool.Scripts, s => s.Contains("catalog.json", StringComparison.Ordinal) || s.Contains(".ids", StringComparison.Ordinal));
     }
 
@@ -218,6 +226,23 @@ public sealed class PoolUpgradeTests
         var message = run.Json.GetProperty("error").GetProperty("message").GetString()!;
         Assert.Contains("shop", message, StringComparison.Ordinal);
         Assert.Contains("sqlbranch image rm shop", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("catalog:shop", _pool.Writes);
+    }
+
+    [Fact]
+    public void A_corrupt_version_record_names_the_file_and_the_remedy_and_writes_nothing_for_it()
+    {
+        _pool.Images["shop"] = _pool.Images["shop"] with { IdFile = "garbage" };
+
+        var run = Json();
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("operation_failed", run.Json.GetProperty("error").GetProperty("code").GetString());
+        var message = run.Json.GetProperty("error").GetProperty("message").GetString()!;
+        Assert.Contains("/pool/images/.ids/shop", message, StringComparison.Ordinal);
+        Assert.Contains("Delete that file", message, StringComparison.Ordinal);
+        Assert.Contains("sqlbranch pool upgrade --yes", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ids:shop", _pool.Writes);
         Assert.DoesNotContain("catalog:shop", _pool.Writes);
     }
 

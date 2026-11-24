@@ -50,6 +50,22 @@ public sealed class BranchBaseTests
         Assert.True(_w.RecordOf("dev1").BaseKnown);
     }
 
+    [Fact]
+    public void Reset_whose_base_image_has_an_unreadable_catalog_refuses_and_changes_nothing()
+    {
+        _w.UseFormat2(Old);
+        _w.AddBranch("dev1", imageVersion: Old, baseKnown: true);
+        _w.Catalog = "{not json";
+
+        var run = Run("branch", "reset", "dev1");
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("operation_failed", run.Json.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("shop", run.Json.GetProperty("error").GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.False(Changed());
+        Assert.Equal(Old, _w.RecordOf("dev1").ImageVersion);
+    }
+
     [Theory]
     [InlineData("removed-and-reused")]
     [InlineData("removed-before-upgrade")]

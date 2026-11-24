@@ -595,6 +595,23 @@ public sealed class ImageListRemoveTests
     }
 
     [Fact]
+    public void Export_of_an_image_with_an_unreadable_catalog_exits_1_operation_failed_naming_image_rm_and_writes_no_file()
+    {
+        UseFormat2();
+        AddImage("crm", "Crm");
+        _catalogs["crm"] = "{not json";
+        var destination = Path.Combine(Path.GetTempPath(), "unreadable-catalog-" + Guid.NewGuid().ToString("N") + ".sbimg");
+        _world.Directories.Add(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar));
+
+        var export = Json("image", "export", "crm", "--to", destination);
+
+        Assert.Equal(1, export.Exit);
+        Assert.Equal("operation_failed", Code(export.Json));
+        Assert.Contains("sqlbranch image rm crm", Message(export.Json), StringComparison.Ordinal);
+        Assert.False(File.Exists(destination));
+    }
+
+    [Fact]
     public void Remove_an_image_with_an_unreadable_catalog_reports_no_versions_and_keeps_the_mark()
     {
         UseFormat2();
@@ -627,6 +644,10 @@ public sealed class ImageListRemoveTests
         Assert.Equal(ids || catalog ? 1 : 0, list.Exit);
         if (ids || catalog)
         {
+            var text = _world.Run("image", "list");
+            Assert.Equal(1, text.Exit);
+            Assert.DoesNotContain("shop", text.Out, StringComparison.Ordinal);
+            Assert.DoesNotContain("NAME", text.Out, StringComparison.Ordinal);
             _world.Directories.Add(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar));
             var export = Json("image", "export", "shop", "--to", Path.Combine(Path.GetTempPath(), "unreadable-credentials.sbimg"));
             foreach (var result in new[] { list, export })

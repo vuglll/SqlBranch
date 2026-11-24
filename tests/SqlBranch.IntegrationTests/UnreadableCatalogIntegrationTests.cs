@@ -30,7 +30,7 @@ public sealed class UnreadableCatalogIntegrationTests(ImageEngineFixture fixture
             ["sh", "-c", "printf '{not json' > /pool/images/crm/catalog.json"], CancellationToken.None);
         Assert.True(corrupt.Succeeded);
 
-        var row = Assert.Single(Json("image", "list").GetProperty("images").EnumerateArray());
+        var row = Json("image", "list").GetProperty("images").EnumerateArray().Single(i => i.GetProperty("name").GetString() == "crm");
         Assert.Equal("crm", row.GetProperty("name").GetString());
         Assert.Equal(JsonValueKind.Null, row.GetProperty("version").ValueKind);
         Assert.False(row.GetProperty("catalogReadable").GetBoolean());

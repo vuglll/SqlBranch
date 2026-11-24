@@ -521,7 +521,12 @@ internal static partial class ImageCommands
             ["images"] = new JsonArray([.. listing.Images.Select(i =>
             {
                 var node = ImageJson(i.Manifest);
-                node["name"] = i.Name;
+                if (i.Manifest is null)
+                {
+                    // No manifest to name it (an unreadable catalog): the folder name. Otherwise the 0.2.2 output is kept.
+                    node["name"] = i.Name;
+                }
+
                 node["catalogReadable"] = i.CatalogReadable;
                 node["branches"] = i.Branches.Count;
                 node["branchNames"] = new JsonArray([.. i.Branches.Select(b => (JsonNode?)b)]);

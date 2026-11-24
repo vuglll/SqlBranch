@@ -145,4 +145,14 @@ public sealed partial class ImageVersionAllocatorTests
         Assert.Contains("\"invalid_name\"", run.Out, StringComparison.Ordinal);
         Assert.Empty(_world.Runtime.Calls);
     }
+
+    [Fact]
+    public void The_high_water_mark_and_catalog_scripts_sync_the_directory_after_each_rename()
+    {
+        var mark = ImageVersions.HighWaterScript("crm", "crm@20261201T020000000Z");
+        Assert.EndsWith("mv -f '/pool/images/.ids/crm.new' '/pool/images/.ids/crm'; sync '/pool/images/.ids' || true", mark, StringComparison.Ordinal);
+
+        var catalog = ImageVersions.CatalogScript("/pool/images/crm", ImageVersions.FirstCatalog("crm", "crm@20261201T020000000Z"));
+        Assert.EndsWith("mv -f '/pool/images/crm/catalog.json.new' '/pool/images/crm/catalog.json' && { sync '/pool/images/crm' || true; }", catalog, StringComparison.Ordinal);
+    }
 }

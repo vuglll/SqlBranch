@@ -92,9 +92,9 @@ public sealed class ImageCatalog
     /// <summary>
     /// The images of the pool. On a format-2 pool each name is read from its catalog (design D3); on format 1 the code path is
     /// the one of 0.2.2. The format comes from the credentials file the same exec reads, and only its number is kept.
-    /// A format above 2 is refused with <c>operation_failed</c>.
+    /// A format above 2 is refused with <c>operation_failed</c>. A caller that already holds the parsed credentials passes them in, so the file is read once per command.
     /// </summary>
-    public async Task<ImageListing> ListAsync(CancellationToken cancellationToken, PoolLocation? pool = null)
+    public async Task<ImageListing> ListAsync(CancellationToken cancellationToken, PoolLocation? pool = null, CredentialsFile? credentials = null)
     {
         var result = await _runtime.ExecAsync(_engineName, ["sh", "-c", ListingScript], cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded)
@@ -156,12 +156,17 @@ public sealed class ImageCatalog
         int format;
         // A format hint from grep cannot validate JSON. With format-2 content, use the
         // credentials reader so damaged credentials cannot silently expose a format-1 view.
-        if (pool is not null && (catalogs.Count > 0 || result.StdOut.Contains("SQLBRANCH_FORMAT2CONTENT", StringComparison.Ordinal)))
+        if (credentials is not null)
+        {
+            // The caller already read and parsed the file; it is not read again.
+            format = credentials.Format;
+        }
+        else if (pool is not null && (catalogs.Count > 0 || result.StdOut.Contains("SQLBRANCH_FORMAT2CONTENT", StringComparison.Ordinal)))
         {
             var engine = await _runtime.InspectAsync(_engineName, cancellationToken).ConfigureAwait(false)
                 ?? throw new SqlBranchException(ErrorCodes.OperationFailed, "The engine container could not be found.");
-            var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool, cancellationToken).ConfigureAwait(false);
-            format = credentials?.Format ?? FormatOf(formatHint, pool);
+            var read = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool, cancellationToken).ConfigureAwait(false);
+            format = read?.Format ?? FormatOf(formatHint, pool);
         }
         else
         {

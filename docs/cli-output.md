@@ -190,6 +190,22 @@ Mismatches: 2
   "error": { "code": "mismatch", "message": "status found 2 mismatches: pool upgrade (pool_upgrade); credentials.json.new (upgrade_leftover)" } }
 ```
 
+On a format-2 pool, an image whose `catalog.json` cannot be parsed is a mismatch of kind `image_catalog`, named by the image,
+and `status` exits 1 `mismatch`. The message names the repair, `sqlbranch image rm <name>`:
+
+```text
+Mismatches: 1
+  crm: The catalog of the image 'crm' is not valid. Run 'sqlbranch image rm crm' to remove it.
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": false, "poolFormat": 2,
+  "mismatches": [
+    { "kind": "image_catalog", "name": "crm", "message": "The catalog of the image 'crm' is not valid. Run 'sqlbranch image rm crm' to remove it." }
+  ],
+  "error": { "code": "mismatch", "message": "status found 1 mismatch: crm (image_catalog)" } }
+```
+
 ## Image list and image rm on both formats
 
 `image list` adds `catalogReadable`: true on format 2, false for an unreadable catalog, and null on format 1. An unreadable catalog has `version` null and is marked "catalog unreadable" in text.

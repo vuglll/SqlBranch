@@ -50,9 +50,10 @@ public sealed class ImageRemover
         NameRules.ValidateImage(name);
         var engine = ImageCatalog.RequireRunningEngine(pool);
 
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
@@ -64,7 +65,7 @@ public sealed class ImageRemover
                 $"Another command is working on the image '{name}': a build or a removal is running. Wait for it to finish.");
         }
 
-        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location).ConfigureAwait(false);
+        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
         var entry = listing.Images.FirstOrDefault(i => i.Name == name)
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
 

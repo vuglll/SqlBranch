@@ -124,6 +124,9 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
             Assert.Equal(101, await BranchKit.CountAsync(again, "SELECT COUNT(*) FROM dbo.Item"));
         }
 
+        // The rewritten credentials file keeps the engine user as owner and mode 600.
+        Assert.Equal("600 10001", await Kit.InPoolAsync("stat -c '%a %u' /pool/engine/credentials.json"));
+
         // "Status after the upgrade"
         var status = World.RunCli("status", "--format", "json");
         Assert.Equal(0, status.Exit);

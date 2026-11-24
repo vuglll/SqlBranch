@@ -57,7 +57,7 @@ internal static class ImageVersions
     {
         var file = Quoting.Shell(IdFile(name));
         var temporary = Quoting.Shell(IdTemporaryFile(name));
-        return $"mkdir -p {Quoting.Shell(IdsDirectory)}; printf %s {Quoting.Shell(id)} > {temporary}; sync {temporary}; mv -f {temporary} {file}";
+        return $"mkdir -p {Quoting.Shell(IdsDirectory)}; printf %s {Quoting.Shell(id)} > {temporary}; sync {temporary}; mv -f {temporary} {file}; sync {Quoting.Shell(IdsDirectory)} || true";
     }
 
     /// <summary>
@@ -96,7 +96,7 @@ internal static class ImageVersions
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(catalog.ToJson()));
         var temporary = Quoting.Shell($"{directory}/{ImageCatalogFile.TemporaryName}");
         var target = Quoting.Shell($"{directory}/{ImageCatalogFile.FileName}");
-        return $"printf %s {Quoting.Shell(encoded)} | base64 -d > {temporary} && sync {temporary} && mv -f {temporary} {target}";
+        return $"printf %s {Quoting.Shell(encoded)} | base64 -d > {temporary} && sync {temporary} && mv -f {temporary} {target} && {{ sync {Quoting.Shell(directory)} || true; }}";
     }
 
     /// <summary>Allocates the ID of a first version and writes its catalog into the image folder, after the manifest.</summary>

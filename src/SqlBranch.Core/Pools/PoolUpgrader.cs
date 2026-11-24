@@ -212,8 +212,9 @@ public sealed class PoolUpgrader
         var name = image.Name;
         if (image.CatalogBase64 is { } text)
         {
-            var existing = ParseCatalog(text) ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
-                $"The catalog of the image '{name}' is not valid. Run 'sqlbranch image rm {name}' to remove the image, then run 'sqlbranch pool upgrade --yes' again.");
+            var existing = ParseCatalog(text)
+                ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
+                    $"{ImageCatalog.InvalidCatalog(name).Message} Then run 'sqlbranch pool upgrade --yes' again.");
             return existing.Current;
         }
 
@@ -221,7 +222,8 @@ public sealed class PoolUpgrader
         if (image.LastId is { } recorded)
         {
             last = ImageVersions.TimeOf(name, recorded) ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
-                $"The version record of the image '{name}' in {ImageVersions.IdFile(name)} is not valid.");
+                $"The version record of the image '{name}' in {ImageVersions.IdFile(name)} is not valid. " +
+                $"Delete that file, or restore it from a copy, then run 'sqlbranch pool upgrade --yes' again.");
         }
 
         // The first ID is the start time. A name that already had a later ID (a high-water mark above the start time) keeps counting up.

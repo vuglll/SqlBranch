@@ -19,6 +19,8 @@ internal sealed partial class UpgradeWorld
         World = new CliWorld();
         World.WithEngine();
         World.Connector.TrackSessionLocks = true;
+        // No database of any name exists, so a branch create finds its name free.
+        World.Connector.ParameterizedScalarHandler = (sql, _) => sql.Contains("sys.databases", StringComparison.Ordinal) ? 0 : 1;
 
         var inner = World.Runtime.ExecHandler;
         World.Runtime.ExecHandler = (container, command) =>
@@ -32,6 +34,17 @@ internal sealed partial class UpgradeWorld
                         $"SQLBRANCH_UPIMAGE|{i.Name}|{(i.HasManifest ? 1 : 0)}|{i.CatalogBase64 ?? "none"}|{i.IdFile ?? "none"}")
                     .Concat(Branches.Order(StringComparer.Ordinal).Select(b => $"SQLBRANCH_UPBRANCH|{b}"));
                 return FakeContainerRuntime.Ok(string.Join('\n', lines) + "\n");
+            }
+
+            if (script.Contains("SQLBRANCH_MANIFEST=", StringComparison.Ordinal))
+            {
+                // The manifest a branch create reads for its image (every image of this fake is Shop).
+                var manifest = Convert.ToBase64String(Encoding.UTF8.GetBytes(new SqlBranch.Core.Images.ImageManifest(
+                    SqlBranch.Core.Images.ImageManifest.CurrentFormat, "shop", "Shop", "16.0.4125.3",
+                    [new SqlBranch.Core.Images.ImageFile("Shop", "Shop.mdf", "data", 8L << 20), new SqlBranch.Core.Images.ImageFile("Shop_log", "Shop_log.ldf", "log", 524_288)],
+                    "FULL", "SIMPLE", 268_435_456, LogRebuilt: true, new DateTimeOffset(2026, 11, 16, 10, 30, 0, TimeSpan.Zero),
+                    "shop.bak", new string('a', 64), new Dictionary<string, string>(), CliWorld.EngineImage).ToJson()));
+                return FakeContainerRuntime.Ok("SQLBRANCH_MANIFEST=" + manifest);
             }
 
             var id = IdWrite().Match(script);
