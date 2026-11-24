@@ -63,3 +63,14 @@ On a pool that uses format 2, when the version a fixture branch was created from
 #### Scenario: Unknown base after the upgrade
 - **WHEN** the clone mode is `thin` or `copy`, fixture branch `t-5e6f7a8b` was created on a format-1 pool before shop was last rebuilt, `sqlbranch pool upgrade --yes` gave it an unknown base, and the test calls reset
 - **THEN** reset throws, the message names `t-5e6f7a8b` and `shop` and does not contain the engine password, and the branch keeps its rows
+
+### Requirement: Fixture reset and dispose during an unfinished upgrade
+While a pool upgrade has not finished, the reset operation of SqlBranch.Testing 0.3 MUST throw without changing the branch, with a message that says the pool upgrade did not finish and names `sqlbranch pool upgrade --yes`. Dispose MUST NOT throw: it SHALL leave the branch, and write a library log line that names `sqlbranch pool upgrade --yes` and says that a later prune removes the branch after it expires.
+
+#### Scenario: Reset during an unfinished upgrade
+- **WHEN** the clone mode is `thin` or `copy`, fixture branch `t-9c0d1e2f` of shop holds one extra row, `sqlbranch pool upgrade --yes` was then killed before it finished, and the test calls reset
+- **THEN** reset throws, the message names `sqlbranch pool upgrade --yes`, and `t-9c0d1e2f` still holds its extra row
+
+#### Scenario: Dispose during an unfinished upgrade
+- **WHEN** the clone mode is `thin` or `copy`, fixture branch `t-9c0d1e2f` exists, `sqlbranch pool upgrade --yes` was killed before it finished, and the test disposes its object
+- **THEN** dispose completes without an exception, `sqlbranch branch list` still shows `t-9c0d1e2f`, and the library log has a line naming `sqlbranch pool upgrade --yes`

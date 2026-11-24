@@ -3,8 +3,9 @@
 Facts for the OpenSpec change `add-pool-format-upgrade`. The section on 0.2.2
 clients moved here from
 [2026-11-19-image-refresh-facts.md](2026-11-19-image-refresh-facts.md) when
-`add-image-refresh` was split on 2026-11-24. Only release 0.2.2 was examined;
-0.2.0 and 0.2.1 are assumed to behave the same and are not tested.
+`add-image-refresh` was split on 2026-11-24. Only the source of release 0.2.2
+was examined while writing the proposal; 0.2.0 and 0.2.1 are run against an
+upgraded pool by task 5.1, which records their transcripts here.
 
 ## Prerequisites (checked 2026-11-24 against docs/roadmap.md)
 

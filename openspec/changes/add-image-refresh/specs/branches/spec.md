@@ -18,15 +18,38 @@
 - **THEN** `sqlbranch branch reset dev1` exits 0, `dev1` holds the rows of `shop@20261201T020000000Z`, and `sqlbranch branch list` still shows it on that version with `outdated` true
 
 ### Requirement: Plain reset refuses a removed or unknown base
-On a pool that uses format 2, when the version a branch was created from was removed, or its base is unknown, `branch reset <name>` MUST exit 1 with `error.code` "image_not_found" before closing any connection, leave the branch unchanged, say that the version it was created from no longer exists, and name `sqlbranch branch reset <name> --latest` as the way to move to the current version.
+On a pool that uses format 2, when the version a branch was created from was removed, or its base is unknown, `branch reset <name>` MUST exit 1 with `error.code` "image_not_found" before closing any connection, leave the branch unchanged, say that the version it was created from no longer exists, and name both fixes: `sqlbranch branch reset <name> --latest` to move to the current version, and `sqlbranch branch rm` plus `sqlbranch branch create`.
 
 #### Scenario: Base removed and name reused
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `dev1` was created from `shop@20261201T090000000Z`, shop was removed with `--force`, `sqlbranch image build shop --from-bak shop.bak` then published `shop@20261203T020000000Z`, and `dev1` has local writes and an open connection
-- **THEN** `sqlbranch branch reset dev1` exits with code 1, `error.code` is "image_not_found", the message names `sqlbranch branch reset dev1 --latest`, and `dev1` keeps its writes and its connection can commit a row
+- **THEN** `sqlbranch branch reset dev1` exits with code 1, `error.code` is "image_not_found", the message names `sqlbranch branch reset dev1 --latest`, `sqlbranch branch rm` and `sqlbranch branch create`, and `dev1` keeps its writes and its connection can commit a row
 
 #### Scenario: Unknown base after the upgrade
 - **WHEN** the clone mode is `thin` or `copy`, branch `old1` got an unknown base from `sqlbranch pool upgrade --yes`, and has local writes
-- **THEN** `sqlbranch branch reset old1` exits with code 1, `error.code` is "image_not_found", the message names `sqlbranch branch reset old1 --latest`, and `old1` keeps its writes
+- **THEN** `sqlbranch branch reset old1` exits with code 1, `error.code` is "image_not_found", the message names `old1`, `sqlbranch branch reset old1 --latest`, `sqlbranch branch rm` and `sqlbranch branch create`, and `old1` keeps its writes
+
+### Requirement: Reset checks before it drops
+`branch reset` SHALL confirm that its base exists (on a pool that uses format 1, the image; on a pool that uses format 2, the recorded base version, or with `--latest` the image's current version), check free space when it copies files, and prepare the new files before it drops the old database. A failure in any of these steps MUST leave the branch as it was.
+
+#### Scenario: Reset when the image is gone
+- **WHEN** the clone mode is `thin` or `copy`, the branch's image was removed, and the user runs `sqlbranch branch reset pr-142`
+- **THEN** the command exits with code 1 and says the image no longer exists
+- **AND** the branch is online with its data unchanged
+
+#### Scenario: Reset of a copy branch without space
+- **WHEN** branch `bench1` was created with `--copy` from a 10 GiB image, free pool space is 4 GiB, and the user runs `sqlbranch branch reset bench1`
+- **THEN** the command exits with code 1 and `error.code` is "pool_full"
+- **AND** `bench1` is online with its data unchanged
+
+#### Scenario: Reset when the base version is gone
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `pr-142` was created from `shop@20261201T090000000Z`, shop was removed with `--force` and built again as `shop@20261203T020000000Z`, and the user runs `sqlbranch branch reset pr-142`
+- **THEN** the command exits with code 1 and `error.code` is "image_not_found"
+- **AND** the branch is online with its data unchanged
+
+#### Scenario: Latest reset without space
+- **WHEN** the clone mode is `copy`, the pool uses format 2, `bench1` was created with `--copy` from the 10 GiB `shop@20261201T020000000Z`, the current version `shop@20261202T020000000Z` is 12 GiB, free pool space is 4 GiB, and the user runs `sqlbranch branch reset bench1 --latest --format json`
+- **THEN** the command exits with code 1 and `error.code` is "pool_full"
+- **AND** `bench1` is online on `shop@20261201T020000000Z` with its data unchanged, and `sqlbranch status` lists no reset leftovers
 
 ### Requirement: A broken branch can be reset again
 Running `branch reset` on a `broken` branch SHALL retry the reset to the same base, with the same removed-base and unknown-base checks as for an online branch. A plain reset SHALL retry the base recorded before the failed reset; `branch reset <name> --latest` SHALL move the branch to the image's current version.
@@ -49,8 +72,8 @@ Running `branch reset` on a `broken` branch SHALL retry the reset to the same ba
 On a pool that uses format 2, when a `branch create` or `branch reset` finds the image's catalog held exclusively by a publication, an `image rm` or an `image prune`, it SHALL retry without queueing for up to 30 seconds. If the hold lasts longer it MUST exit 1 with `error.code` "catalog_busy", name the image, and change nothing.
 
 #### Scenario: Hold ends within the retry
-- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, a publication of shop holds its catalog exclusively for 2 seconds (tested with a fake runtime and a fake clock), and the user runs `sqlbranch branch create dev9 --from shop` during the hold
-- **THEN** the command exits with code 0 and `dev9` uses the version that is current after the hold
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop's current version is `shop@20261201T020000000Z`, a publication of shop holds its catalog exclusively for 2 seconds and makes `shop@20261202T020000000Z` current (tested with a fake runtime and a fake clock), and the user runs `sqlbranch branch create dev9 --from shop --format json` during the hold
+- **THEN** the command exits with code 0 and `branch.imageVersion` is "shop@20261202T020000000Z"
 
 #### Scenario: Hold outlasts the retry
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, an `image rm shop --force` holds shop's catalog exclusively for 31 seconds (tested with a fake runtime and a fake clock), and the user runs `sqlbranch branch reset dev1` during the hold

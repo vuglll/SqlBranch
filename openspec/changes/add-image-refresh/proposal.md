@@ -40,7 +40,7 @@ None.
 
 Core image and branch operations, CLI metadata, status, on-pool metadata, JSON fields and user docs change. No new error codes: `catalog_busy` and `pool_upgrade_required` come from `add-pool-format-upgrade`. No new setting: `publishWait` comes from there too.
 
-The deltas "Plain reset refuses a removed or unknown base" and "A broken branch can be reset again" (`branches`), "Reset from test code" and "Fixture reset with a removed or unknown base" (`test-fixtures`), and "Guardrails" (`agent-skill`) modify requirements that `add-pool-format-upgrade` adds or modifies, and start from its text. `openspec validate` reports that archive would refuse them until that change is archived; that is expected and is why this change depends on it.
+The deltas "Plain reset refuses a removed or unknown base", "Reset checks before it drops", "A broken branch can be reset again" and "Reset a branch" (`branches`), "Image names are unique" and "Remove an image" (`images`), "Reset from test code" and "Fixture reset with a removed or unknown base" (`test-fixtures`), and "Guardrails" (`agent-skill`) modify requirements that `add-pool-format-upgrade` adds or modifies, and start from its text. `openspec validate` reports that archive would refuse them until that change is archived; that is expected and is why this change depends on it.
 
 0.2.2 `image list` and `image export` on an upgraded pool see only the version the upgrade created, while it is kept: after a refresh they list or export an older version than the current one, and a 0.2.2 export can fail if `image prune` removes its version during the export (0.2.2 takes no export lock). This is a documented limitation, not blocked.
 

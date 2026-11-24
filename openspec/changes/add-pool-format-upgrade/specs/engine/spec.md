@@ -44,11 +44,12 @@
 ## ADDED Requirements
 
 ### Requirement: A running upgrade is shown as in progress
-While `pool upgrade --yes` is still running, `sqlbranch status` SHALL show the upgrade, and its temporary credentials file, as in progress, not as mismatches, and SHALL not exit 1 because of them.
+While `pool upgrade --yes` is still running, `sqlbranch status` SHALL show the upgrade, and its temporary files, as in progress, not as mismatches, and SHALL not exit 1 because of them. `status` SHALL only test whether the upgrade lock is held and MUST NOT take it.
 
 #### Scenario: Upgrade still running
 - **WHEN** `sqlbranch pool upgrade --yes` is waiting for a reset of `dev1` in another process and nothing else is out of place
 - **THEN** `sqlbranch status` exits with code 0, shows the pool upgrade as in progress, and lists no mismatch
+- **AND** with a recording connector, `status` sent no request to take the lock `sqlbranch:pool-upgrade`, and the upgrade then exits 0 after the reset ends
 
 #### Scenario: Temporary credentials file of a running upgrade
 - **WHEN** `sqlbranch pool upgrade --yes` is paused after it wrote the new credentials to a temporary file and before it replaced the old file (tested with a barrier in a fake runtime), and nothing else is out of place
@@ -125,7 +126,7 @@ When more than one environment error applies, a command SHALL report the first o
 - **THEN** the command exits with code 0 and `images` is [{"name":"crm","version":"crm@20261201T090000000Z"},{"name":"shop","version":"shop@20261201T090000000Z"}]
 
 ### Requirement: Upgrade records the base of existing branches
-`pool upgrade --yes` SHALL record each branch's base as its image's first version when the image exists and the branch was created at or after the image was last built or imported on this pool. A branch whose image is gone SHALL get a removed base. Any other branch SHALL get an unknown base, and the command SHALL name it.
+`pool upgrade --yes` SHALL record each branch's base as its image's first version when the image exists and the branch was created at or after the build time recorded in the image's manifest (for an imported image, the time its archive was built). A branch whose image is gone SHALL get a removed base. Any other branch SHALL get an unknown base, and the command SHALL name it.
 
 #### Scenario: Branch older than its image
 - **WHEN** the pool uses format 1, shop was last built at 2026-11-20T10:00:00Z, branch `old1` of shop was created at 2026-11-18T10:00:00Z and branch `dev1` at 2026-11-21T10:00:00Z, and the user runs `sqlbranch pool upgrade --yes --format json` at 2026-12-01T09:00:00.000Z (tested with a fake clock)
@@ -135,6 +136,11 @@ When more than one environment error applies, a command SHALL report the first o
 #### Scenario: Branch of a removed image
 - **WHEN** the pool uses format 1, branch `pr-9` was created from crm, crm was removed with `--force`, and the user runs `sqlbranch pool upgrade --yes --format json`
 - **THEN** the command exits with code 0 and `branches.removedBase` is ["pr-9"]
+
+#### Scenario: Image replaced by an import of an older archive
+- **WHEN** the pool uses format 1, crm was built at 2026-11-10T10:00:00Z, branch `pr-3` was created from it at 2026-11-12T10:00:00Z, crm was removed with `sqlbranch image rm crm --force` at 2026-11-14T10:00:00Z, `sqlbranch image import crm.sbimg --as crm` ran at 2026-11-15T10:00:00Z with an archive built at 2026-11-11T10:00:00Z, and the user runs `sqlbranch pool upgrade --yes --format json` at 2026-12-01T09:00:00.000Z (tested with a fake clock)
+- **THEN** the command exits with code 0, `branches.pinned` is ["pr-3"] and `branches.removedBase` is []
+- **AND** `sqlbranch branch list --format json` shows `pr-3` with `imageVersion` "crm@20261201T090000000Z"
 
 ### Requirement: Upgrade output
 `pool upgrade --yes` SHALL report the old and new format, each image with its first version ID, and the branches with a pinned, unknown or removed base. In text and in JSON format it SHALL print on standard error a `warning:` line saying the change cannot be undone and that SqlBranch 0.2.x tools and SqlBranch.Testing 0.2.x packages can no longer use the pool.
@@ -157,19 +163,19 @@ No command SHALL move a pool from format 2 back to format 1. Running `pool upgra
 - **AND** the text output of the same command says the pool already uses format 2
 
 ### Requirement: Upgrade waits for running operations
-`pool upgrade --yes` SHALL first rewrite the engine credentials, so SqlBranch 0.2.x commands started after that fail, then wait, for at most `publishWait`, for running operations of any SqlBranch version on existing image names and existing branches. When the wait runs out it MUST exit 1 with `error.code` "catalog_busy" and name the busy image or branch.
+`pool upgrade --yes` SHALL first rewrite the engine credentials, so SqlBranch 0.2.x commands started after that fail, then wait, for at most `publishWait`, for running operations of any SqlBranch version on existing image names and existing branches. When the wait runs out it MUST exit 1 with `error.code` "catalog_busy" and name every image and branch that is still busy.
 
 #### Scenario: Branch create still running
-- **WHEN** the pool uses format 1, `publishWait` is `10m`, and a `sqlbranch branch create dev4 --from shop` started before the upgrade keeps running for 11 minutes (tested with a fake clock)
-- **THEN** `sqlbranch pool upgrade --yes` exits with code 1 at the 10-minute mark, `error.code` is "catalog_busy", and the message names `dev4` and says to run `sqlbranch pool upgrade --yes` again
+- **WHEN** the pool uses format 1, `publishWait` is `10m`, and a `sqlbranch branch create dev4 --from shop` started before the upgrade, has made the branch folder of `dev4`, and keeps running for 11 minutes (tested with a fake clock)
+- **THEN** `sqlbranch pool upgrade --yes` exits with code 1 at the 10-minute mark, `error.code` is "catalog_busy", and the message names both `shop` and `dev4` and says to run `sqlbranch pool upgrade --yes` again
 - **AND** `sqlbranch status` exits with code 1 and reports that the pool upgrade did not finish
 
 ### Requirement: Upgrade does not wait for new names
-`pool upgrade --yes` SHALL NOT wait for builds and imports of image names that do not exist yet, nor for a `branch create` whose branch does not exist yet. What they write SHALL be listed after the upgrade and adopted by the first command that uses it.
+`pool upgrade --yes` SHALL NOT wait for builds and imports of image names that have no image directory, nor for a `branch create` from such an image. A `branch create` from an existing image SHALL be waited for through that image's lock. The upgrade SHALL process only the images and branches it waited for; what the others write SHALL be listed after the upgrade and adopted by the first command that uses it.
 
 #### Scenario: Build of a new name during the upgrade
-- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, `sqlbranch image build crm2 --from-bak crm.bak` is restoring when `sqlbranch pool upgrade --yes` starts, and the build publishes while the upgrade waits for a reset of `dev1` (tested with barriers and a fake clock)
-- **THEN** the build and the upgrade both exit 0, and `sqlbranch image list --format json` shows crm2 with `version` null
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, `sqlbranch image build crm2 --from-bak crm.bak` is restoring when `sqlbranch pool upgrade --yes --format json` starts, and the build publishes while the upgrade waits for a reset of `dev1` (tested with barriers and a fake clock)
+- **THEN** the build and the upgrade both exit 0, the upgrade's JSON `images` does not list crm2, and `sqlbranch image list --format json` shows crm2 with `version` null
 - **AND** `sqlbranch branch create d2 --from crm2 --format json` at 2026-12-01T09:05:00.000Z exits 0 with `branch.imageVersion` "crm2@20261201T090500000Z", and `sqlbranch image list --format json` then shows crm2 with that `version`
 
 ### Requirement: One upgrade at a time
@@ -189,7 +195,7 @@ No command SHALL move a pool from format 2 back to format 1. Running `pool upgra
 - **AND** the engine container's start time from `docker inspect` is unchanged, the server logins are unchanged, and `dev1`'s open connection can commit a row
 
 ### Requirement: An interrupted upgrade blocks writes until it is rerun
-While a pool upgrade has not finished, every command that changes images or branches and starts, or reaches its check after locking, MUST exit 3 with `error.code` "pool_upgrade_required", say the upgrade did not finish and name `sqlbranch pool upgrade --yes`. `image list`, `image export`, `branch list`, `branch conn` and `status` SHALL keep working.
+While a pool upgrade has not finished, every command that changes images or branches and starts, or reaches its check after locking, MUST exit 3 with `error.code` "pool_upgrade_required", say the upgrade did not finish and name `sqlbranch pool upgrade --yes`. `image list`, `image export`, `branch list`, `branch conn`, `status` and `teardown --force` SHALL keep working.
 
 #### Scenario: Create during an unfinished upgrade
 - **WHEN** the clone mode is `thin` or `copy` and `sqlbranch pool upgrade --yes` was killed after it recorded shop's version and before crm's, and the user runs `sqlbranch branch create dev5 --from crm`
@@ -229,6 +235,32 @@ The rewritten engine credentials MUST stay readable and writable only by the eng
 #### Scenario: Killed while rewriting the credentials
 - **WHEN** the client running `sqlbranch pool upgrade --yes` is killed at each step of the credentials rewrite in turn (tested with a fake runtime)
 - **THEN** after each kill `sqlbranch image list` exits with code 0, and running `sqlbranch pool upgrade --yes` again exits 0 and `sqlbranch branch conn dev1` still connects
+
+### Requirement: A failed image lock is checked against the pool format
+When a `branch create` or `branch reset` cannot take an image lock, it SHALL read the pool format again before it reports the failure. During an unfinished or running pool upgrade it MUST exit 3 with `error.code` "pool_upgrade_required" and name `sqlbranch pool upgrade --yes` instead of saying that the image is being built or removed. Otherwise it SHALL report the lock failure as before.
+
+#### Scenario: Create meets an image lock held by a running upgrade
+- **WHEN** the clone mode is `thin` or `copy`, `sqlbranch pool upgrade --yes` holds shop's image lock while it waits for a reset of `dev1` in another process, and the user runs `sqlbranch branch create dev7 --from shop`
+- **THEN** the create exits with code 3, `error.code` is "pool_upgrade_required", the message says a pool upgrade is running and names `sqlbranch pool upgrade --yes`, the message does not say the image is being built or removed, and no branch `dev7` exists
+
+#### Scenario: Reset meets an image lock taken by an upgrade that started after its first read
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, `sqlbranch branch reset dev1` (a branch of shop) has read format 1, and `sqlbranch pool upgrade --yes` then rewrites the credentials and takes shop's image lock before the reset tries it (tested with a fake runtime)
+- **THEN** the command exits with code 3, `error.code` is "pool_upgrade_required", the message names `sqlbranch pool upgrade --yes`, and `dev1` is online with its data unchanged
+
+#### Scenario: Create meets an image lock on a format-1 pool
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, `sqlbranch image rm shop` holds shop's image lock in another process (tested with a fake runtime), and the user runs `sqlbranch branch create dev7 --from shop`
+- **THEN** the command exits with code 1 with the same error code and message as SqlBranch 0.2.2, and `sqlbranch status --format json` reports `poolFormat` 1
+
+### Requirement: Teardown works on every pool format
+`sqlbranch teardown --force` SHALL work on a pool that uses format 1, on a pool that uses format 2, and during an unfinished pool upgrade, and SHALL remove everything the existing teardown rule names, including the temporary files and version-ID records the upgrade wrote.
+
+#### Scenario: Teardown during an unfinished upgrade
+- **WHEN** the clone mode is `thin`, `sqlbranch pool upgrade --yes` was killed after it rewrote the credentials, and the user runs `sqlbranch teardown --force`
+- **THEN** the command exits with code 0, the engine container and the pool are gone, and `sqlbranch init` followed by `sqlbranch status --format json` reports `poolFormat` 1
+
+#### Scenario: Teardown of a format-2 pool
+- **WHEN** the clone mode is `copy`, the pool uses format 2 with image shop and branch `dev1`, and the user runs `sqlbranch teardown --force`
+- **THEN** the command exits with code 0 and the engine container, shop, `dev1` and the pool are gone
 
 ### Requirement: Older clients stop on an upgraded pool
 On a pool that uses format 2 with the engine running, SqlBranch 0.2.2 commands that read the engine credentials (`init`, `engine start`, `status`, every `image build`, `image import`, `image rm`, and every `branch` command) MUST exit 1 with `error.code` "operation_failed" before changing any file, and SqlBranch.Testing 0.2.x create and reset MUST throw. With the engine stopped they report `engine_stopped` as before.
