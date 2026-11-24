@@ -84,3 +84,30 @@ With `--format json`, a successful `image build` or `image import` SHALL add `im
 #### Scenario: Version in build JSON on a format-1 pool
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, and the user runs `sqlbranch image build shop --from-scripts db --format json`
 - **THEN** the command exits with code 0 and `image.version` is null
+
+### Requirement: Unreadable image catalog
+On a pool that uses format 2, an image whose `catalog.json` cannot be parsed SHALL still be listed, with `version` null and `catalogReadable` false, and `status` SHALL report it as a mismatch. `image rm` SHALL remove it and keep the name's high-water mark. Every other command that uses the name MUST exit 1 with `error.code` "operation_failed", name `sqlbranch image rm <name>`, and change nothing.
+
+#### Scenario: Catalog flag on readable catalogs
+- **WHEN** the pool uses format 2 with readable catalogs, or uses format 1, and the user runs `sqlbranch image list --format json`
+- **THEN** every row has `catalogReadable` true on format 2 and null on format 1
+
+#### Scenario: List an image with an unreadable catalog
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, and the `catalog.json` of image crm holds invalid JSON (tested by writing it directly)
+- **THEN** `sqlbranch image list --format json` exits with code 0 and shows crm with `version` null and `catalogReadable` false, the text output marks crm "catalog unreadable", and `sqlbranch status` exits with code 1 and names `sqlbranch image rm crm`
+
+#### Scenario: Remove an image with an unreadable catalog
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, crm has an unreadable catalog and no branches, and the user runs `sqlbranch image rm crm --format json`
+- **THEN** the command exits with code 0, `image.versions` is [], `sqlbranch image list` no longer shows crm, and a later build of crm gets a version ID above crm's high-water mark
+
+#### Scenario: Use an image with an unreadable catalog
+- **WHEN** the pool uses format 2, crm has an unreadable catalog, and the user runs `sqlbranch branch create d1 --from crm` or `sqlbranch image export crm --to crm.sbimg`
+- **THEN** each command exits with code 1, `error.code` is "operation_failed", the message names `sqlbranch image rm crm`, and no file in the pool changes
+
+### Requirement: Unreadable credentials on a format-2 pool
+When the engine credentials file cannot be parsed and the pool holds format-2 content (an `images/.ids` directory or any image `catalog.json`), `image list` and `image export` MUST exit 1 with `error.code` "operation_failed" and "The engine credentials file in <pool> is not valid." instead of showing a format-1 view. Without format-2 content they SHALL behave as in 0.2.2.
+
+#### Scenario: Image list with unreadable credentials on a format-2 pool
+- **WHEN** the pool was upgraded to format 2 and its `credentials.json` then holds invalid JSON (tested by writing it directly)
+- **THEN** `sqlbranch image list` and `sqlbranch image export shop --to shop.sbimg` exit with code 1, `error.code` is "operation_failed", and neither prints any image row
+
