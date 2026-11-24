@@ -97,7 +97,6 @@ public sealed class BacpacSealTests
 
         Assert.Matches(@"^shop@\d{8}T\d{9}Z$", version.GetString());
         Assert.Contains(fixture.Timeline, l => l.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal));
-        Assert.DoesNotContain(fixture.Timeline, l => l.Contains("echo exists", StringComparison.Ordinal));
         fixture.AssertOrder("/pool/images/.ids/shop.new", "catalog.json.new", "mv -nT -- ");
         var catalogWrite = fixture.Timeline.Single(l => l.Contains("catalog.json.new", StringComparison.Ordinal) && l.Contains("base64", StringComparison.Ordinal));
         Assert.Contains($"{fixture.Operation.StagedImage}/catalog.json.new", catalogWrite, StringComparison.Ordinal);

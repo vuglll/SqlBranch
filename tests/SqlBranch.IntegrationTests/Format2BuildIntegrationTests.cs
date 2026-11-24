@@ -21,12 +21,14 @@ public sealed class Format2BuildIntegrationTests(ImageEngineFixture fixture, ITe
 
     private static readonly DateTimeOffset First = new(2026, 12, 2, 2, 0, 0, TimeSpan.Zero);
 
-    private async Task UseFormat2Async()
+    private Task UseFormat2Async() => UseFormat2Async(World);
+
+    internal static async Task UseFormat2Async(EngineWorld world)
     {
-        var json = CredentialsFile.Format2(World.Password, null).ToJson();
+        var json = CredentialsFile.Format2(world.Password, null).ToJson();
         var runner = new SqlBranch.Core.Containers.SystemProcessRunner();
         var result = await runner.RunAsync("docker",
-            ["exec", "-i", "-u", "0", World.EngineName, "sh", "-c",
+            ["exec", "-i", "-u", "0", world.EngineName, "sh", "-c",
                 "cat > /pool/engine/credentials.json.new && chown 10001:0 /pool/engine/credentials.json.new && chmod 600 /pool/engine/credentials.json.new && mv -f /pool/engine/credentials.json.new /pool/engine/credentials.json"],
             null, CancellationToken.None, json);
         Assert.True(result.ExitCode == 0, "could not rewrite the credentials file of the test engine");

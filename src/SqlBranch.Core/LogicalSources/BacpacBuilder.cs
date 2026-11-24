@@ -116,16 +116,14 @@ public sealed partial class BacpacBuilder(
         {
             throw new SqlBranchException(ErrorCodes.ImageExists, $"Another build of image '{image}' is running.");
         }
-        bool exists;
-        if (credentials.Format >= 2)
+        // The folder test also runs on format 2: a leftover folder with no catalog or manifest must fail here with
+        // image_exists, not later at the publishing move.
+        var imagePath = Quoting.Shell(ImagePaths.Image(image));
+        var occupied = BacpacOwnership.AnyOf($"[ -e {imagePath} ]", $"[ -L {imagePath} ]");
+        var exists = (await ownership.ShellAsync($"if {occupied}; then echo exists; fi", token).ConfigureAwait(false)).Length > 0;
+        if (!exists && credentials.Format >= 2)
         {
             exists = await ImageCatalog.NameExistsAsync(runtime, engine.Id, image, credentials.Format, token).ConfigureAwait(false);
-        }
-        else
-        {
-            var imagePath = Quoting.Shell(ImagePaths.Image(image));
-            var occupied = BacpacOwnership.AnyOf($"[ -e {imagePath} ]", $"[ -L {imagePath} ]");
-            exists = (await ownership.ShellAsync($"if {occupied}; then echo exists; fi", token).ConfigureAwait(false)).Length > 0;
         }
         if (exists)
         {

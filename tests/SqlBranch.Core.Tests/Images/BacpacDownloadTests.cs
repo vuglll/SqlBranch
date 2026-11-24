@@ -164,6 +164,21 @@ public sealed class BacpacDownloadTests
         fixture.NoPublication();
     }
 
+    [Fact]
+    public void A_leftover_folder_without_catalog_or_manifest_is_image_exists_on_a_format_2_pool()
+    {
+        using var fixture = new Fixture();
+        SqlBranch.Core.Tests.Fakes.Format2Pool.Apply(fixture.World);
+        fixture.ExistingImage = true;
+
+        var run = fixture.Run(AzureUrl);
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("image_exists", Code(run.Out));
+        Assert.Empty(fixture.Source.Calls);
+        fixture.NoPublication();
+    }
+
     [Theory]
     [InlineData("redirect", "storage_unreachable", 1)]
     [InlineData("403", "storage_unreachable", 2)]

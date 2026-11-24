@@ -63,6 +63,39 @@ public sealed class BacpacBuildIntegrationTests
     }
 
     [IntegrationThinFact]
+    public async Task A_bacpac_build_and_an_import_on_a_format_2_pool_publish_versions()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await Format2BuildIntegrationTests.UseFormat2Async(fixture.World);
+
+        var built = fixture.World.RunCli("image", "build", "sales", "--from-bacpac", fixture.Package, "--sqlpackage", fixture.Executable, "--format", "json");
+        Assert.True(built.Exit == 0, built.Out + built.Err);
+        using (var json = JsonDocument.Parse(built.Out))
+        {
+            Assert.Matches(@"^sales@\d{8}T\d{9}Z$", json.RootElement.GetProperty("image").GetProperty("version").GetString());
+        }
+        await fixture.AssertCleanAsync();
+
+        var scripts = Directory.CreateDirectory(Path.Combine(fixture.Client.FullName, "f2-scripts")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(scripts, "001.sql"), "CREATE TABLE dbo.T (id int); INSERT dbo.T VALUES (1);");
+        Assert.Equal(0, fixture.World.RunCli("image", "build", "shopsrc", "--from-scripts", scripts).Exit);
+        var archive = Path.Combine(fixture.Client.FullName, "shop.sbimg");
+        Assert.Equal(0, fixture.World.RunCli("image", "export", "shopsrc", "--to", archive).Exit);
+        var imported = fixture.World.RunCli("image", "import", archive, "--as", "shop3", "--format", "json");
+        Assert.True(imported.Exit == 0, imported.Out + imported.Err);
+
+        var list = fixture.World.RunCli("image", "list", "--format", "json");
+        Assert.Equal(0, list.Exit);
+        using var listed = JsonDocument.Parse(list.Out);
+        var images = listed.RootElement.GetProperty("images").EnumerateArray().ToDictionary(i => i.GetProperty("name").GetString()!);
+        foreach (var name in new[] { "sales", "shop3" })
+        {
+            Assert.Equal(JsonValueKind.String, images[name].GetProperty("version").ValueKind);
+        }
+        await fixture.AssertCleanAsync();
+    }
+
+    [IntegrationThinFact]
     public async Task Rolls_back_after_partial_import_failure_and_cancellation()
     {
         await using var fixture = await Fixture.CreateAsync();
