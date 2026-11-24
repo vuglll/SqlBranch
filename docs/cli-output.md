@@ -124,6 +124,103 @@ of one `image list` entry with `branches` 0. A failed import exits 1 with `archi
 a bad `--as`, a misused `--s3-region` or a missing or invalid storage secret exits 2.
 A newer build of the same major version is a warning on standard error and exit 0.
 
+## Status and the pool format
+
+`status` reports the pool format as `poolFormat` (an integer, in the JSON
+document next to `images` and `branches`) and as a `Pool format` line in text. The new fields of this release are
+additive under schemaVersion 1; on a format-1 pool they are null or `[]` (and `poolFormat` is 1), so that output stays
+compatible with 0.2.2. Examples of a running engine, with the unchanged lines left out:
+
+Format 1:
+
+```text
+Pool backend: loop-xfs
+Pool format: 1
+Clone mode: thin
+Mismatches: none
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": true, "poolFormat": 1, "images": 2, "branches": 1,
+  "inProgress": [], "mismatches": [] }
+```
+
+Format 2 (the exit code is 0):
+
+```text
+Pool format: 2
+Mismatches: none
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": true, "poolFormat": 2, "images": 2, "branches": 1,
+  "inProgress": [], "mismatches": [] }
+```
+
+Upgrade in progress. The upgrade lock is held, so `status` shows the upgrade, and its temporary credentials file, as
+in progress and exits 0:
+
+```text
+Pool format: 1
+In progress: pool upgrade is running
+Mismatches: none
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": true, "poolFormat": 1,
+  "inProgress": ["pool upgrade is running"], "mismatches": [] }
+```
+
+Upgrade not finished. The credentials say `running` and nobody holds the lock, or a temporary credentials file is left.
+`status` exits 1 `mismatch` and names the rerun:
+
+```text
+Pool format: 2
+Mismatches: 2
+  pool upgrade: The pool upgrade did not finish. Commands that change images or branches are refused until it finishes. Run 'sqlbranch pool upgrade --yes' to finish it.
+  credentials.json.new: The temporary file /pool/engine/credentials.json.new was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it.
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": false, "poolFormat": 2,
+  "mismatches": [
+    { "kind": "pool_upgrade", "name": "pool upgrade", "message": "The pool upgrade did not finish. ..." },
+    { "kind": "upgrade_leftover", "name": "credentials.json.new", "message": "The temporary file ... was left by a pool upgrade that did not finish. ..." }
+  ],
+  "error": { "code": "mismatch", "message": "status found 2 mismatches: pool upgrade (pool_upgrade); credentials.json.new (upgrade_leftover)" } }
+```
+
+## Image list and image rm on both formats
+
+`image list` adds `version` to each image: the ID of the name's current version on a format-2 pool, null on a format-1
+pool and for an image an older client wrote after the upgrade and no command has adopted yet. `image rm` adds
+`image.versions`, the IDs removed with the name; it is `[]` on a format-1 pool and for an image with no catalog.
+
+```json
+{ "command": "image list", "ok": true,
+  "images": [ { "name": "shop", "version": null, "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
+```
+
+```json
+{ "command": "image list", "ok": true,
+  "images": [ { "name": "shop", "version": "shop@20261201T090000000Z", "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
+```
+
+The first document is a format-1 pool and the second a format-2 pool. In text the format-2 table has a `VERSION`
+column after `BRANCHES`; the format-1 table is the 0.2.2 table.
+
+```json
+{ "command": "image rm", "ok": true,
+  "image": { "name": "crm", "removed": true, "forced": false, "branches": [], "versions": [] } }
+```
+
+```json
+{ "command": "image rm", "ok": true,
+  "image": { "name": "crm", "removed": true, "forced": false, "branches": [], "versions": ["crm@20261201T090000000Z"] } }
+```
+
+Again the first is a format-1 pool and the second a format-2 pool.
+
 ## Doctor output
 
 `sqlbranch doctor --format json` returns a `checks` array. Each entry contains

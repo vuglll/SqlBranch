@@ -73,6 +73,9 @@ internal sealed partial class FakeEngineConnector : IEngineConnector
     /// <summary>Application locks a session took and kept, in order.</summary>
     public List<string> TakenLocks { get; } = [];
 
+    /// <summary>Locks looked at with <c>APPLOCK_TEST</c>, which never takes them.</summary>
+    public List<string> ProbedLocks { get; } = [];
+
     /// <summary>Answers a query with parameters that returns named rows (the RESTORE inspections and file lists).</summary>
     public Func<string, IReadOnlyDictionary<string, object?>, IReadOnlyList<IReadOnlyDictionary<string, object?>>>? RowsHandler { get; set; }
 
@@ -134,6 +137,14 @@ internal sealed partial class FakeEngineConnector : IEngineConnector
         {
             owner.Statements.Add(sql);
             owner.Parameters.Add(new Dictionary<string, object?>(parameters));
+            if (sql.Contains("APPLOCK_TEST", StringComparison.Ordinal))
+            {
+                // Looks at the lock and never takes it: 1 when it could be granted, 0 when another session holds it.
+                var probed = Convert.ToString(parameters["resource"], System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+                owner.ProbedLocks.Add(probed);
+                return Task.FromResult<object?>(owner.HeldLocks.Contains(probed) ? 0 : 1);
+            }
+
             if (sql.Contains("sp_releaseapplock", StringComparison.Ordinal) && !sql.Contains("sp_getapplock", StringComparison.Ordinal))
             {
                 var resource = Convert.ToString(parameters["resource"], System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;

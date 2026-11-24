@@ -122,7 +122,7 @@ public sealed class BranchCreator
         CloneMode mode = CloneMode.Copy;
         try
         {
-            mode = await RunStepsAsync(session, state, record, copy, requireThin, cancellationToken).ConfigureAwait(false);
+            mode = await RunStepsAsync(session, state, record, copy, requireThin, engine.PoolFormat, cancellationToken).ConfigureAwait(false);
         }
 #pragma warning disable CA1031 // Whatever failed, the create undoes what it did and then reports the failure itself.
         catch (Exception ex)
@@ -147,14 +147,14 @@ public sealed class BranchCreator
         { ExpiresAt = record.ExpiresAt, Labels = record.Labels };
     }
 
-    private async Task<CloneMode> RunStepsAsync(IEngineSession session, State state, BranchRecord record, bool copy, bool requireThin, CancellationToken cancellationToken)
+    private async Task<CloneMode> RunStepsAsync(IEngineSession session, State state, BranchRecord record, bool copy, bool requireThin, int poolFormat, CancellationToken cancellationToken)
     {
         var name = state.Name;
 
         var image = record.Image;
 
         // 1. The image exists and the name is free. Both are read under the locks, so neither can change meanwhile.
-        var manifest = await ReadManifestAsync(image, cancellationToken).ConfigureAwait(false);
+        var manifest = await ReadManifestAsync(image, poolFormat, cancellationToken).ConfigureAwait(false);
         await RequireFreeNameAsync(session, name, cancellationToken).ConfigureAwait(false);
         var poolMode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName, _newId()).ConfigureAwait(false);
 
@@ -207,8 +207,14 @@ public sealed class BranchCreator
         }
     }
 
-    private async Task<ImageManifest> ReadManifestAsync(string image, CancellationToken cancellationToken)
+    private async Task<ImageManifest> ReadManifestAsync(string image, int poolFormat, CancellationToken cancellationToken)
     {
+        if (poolFormat >= 2)
+        {
+            return await ImageCatalog.ReadCurrentManifestAsync(_runtime, _engineName, image, cancellationToken).ConfigureAwait(false)
+                ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{image}'. 'sqlbranch image list' shows the images.");
+        }
+
         var path = Quoting.Shell(ImagePaths.Manifest(image));
         var output = await ShellAsync($"if [ -f {path} ]; then echo {ManifestTag}$(base64 -w0 {path}); else echo {ManifestTag}none; fi", "reading the image", cancellationToken).ConfigureAwait(false);
         var value = ValueOf(output, ManifestTag);

@@ -22,6 +22,9 @@ public static class EngineLocks
     public static string Credential(string credentialName) =>
         "sqlbranch_cred_" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(credentialName)))[..16];
 
+    /// <summary>Held by <c>pool upgrade</c> for as long as it runs. <c>status</c> tests it and never takes it.</summary>
+    public const string PoolUpgrade = "sqlbranch:pool-upgrade";
+
     /// <summary>Held by <c>branch create</c>, <c>reset</c> and <c>rm</c> of the branch <paramref name="name"/>.</summary>
     public static string Branch(string name) => "sqlbranch:branch:" + name;
 
@@ -56,6 +59,12 @@ public static class EngineLocks
     public const string ReleaseSql =
         "USE master; DECLARE @r int; EXEC @r = sys.sp_releaseapplock @Resource = @resource, @LockOwner = 'Session'; SELECT @r;";
 
+    /// <summary>
+    /// Tests a lock with <c>APPLOCK_TEST</c>, which never takes it: 1 when an exclusive session lock could be granted,
+    /// 0 when another session holds it. It runs in <c>master</c>, where the locks are taken.
+    /// </summary>
+    public const string ProbeSql = "USE master; SELECT APPLOCK_TEST('public', @resource, 'Exclusive', 'Session');";
+
     /// <summary>The parameter name of the resource in <see cref="TestSql"/> and <see cref="TakeSql"/>.</summary>
     public const string ResourceParameter = "resource";
 
@@ -65,6 +74,14 @@ public static class EngineLocks
         ArgumentNullException.ThrowIfNull(session);
         var result = Convert.ToInt32(await session.ScalarAsync(TestSql, new Dictionary<string, object?> { [ResourceParameter] = resource }, cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
         return result < 0;
+    }
+
+    /// <summary>True when another session holds the lock. The lock is only looked at, never taken, not even for a moment.</summary>
+    public static async Task<bool> IsHeldWithoutTakingAsync(IEngineSession session, string resource, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var result = Convert.ToInt32(await session.ScalarAsync(ProbeSql, new Dictionary<string, object?> { [ResourceParameter] = resource }, cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
+        return result == 0;
     }
 
     /// <summary>

@@ -24,6 +24,9 @@ public sealed partial class ImageImportTests : IDisposable
     private const string Id = "abc123def456";
 
     private readonly CliWorld _world = new();
+
+    /// <summary>What the engine says about the folder of <c>shop2</c> on a format-2 pool: <c>legacy</c> or <c>catalog.json</c> as base64.</summary>
+    private string _catalogFileOfShop2 = "legacy";
     private readonly byte[] _data = new byte[300_000];
     private readonly byte[] _log = new byte[70_001];
     private readonly ImageManifest _manifest;
@@ -94,6 +97,11 @@ public sealed partial class ImageImportTests : IDisposable
             if (script.Contains("SQLBRANCH_FREE=", StringComparison.Ordinal))
             {
                 return FakeContainerRuntime.Ok($"SQLBRANCH_FREE={_free}");
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + (_paths.Contains("/pool/images/shop2") && _existsCheckSeesIt ? _catalogFileOfShop2 : "none"));
             }
 
             if (script.Contains("SQLBRANCH_EXISTS=", StringComparison.Ordinal))
@@ -695,6 +703,19 @@ public sealed partial class ImageImportTests : IDisposable
     }
 
     // ---- Imported image names are unique ----
+
+    [Fact]
+    public async Task On_a_format_2_pool_a_name_with_a_catalog_or_an_older_clients_image_is_image_exists_and_nothing_is_written()
+    {
+        Format2Pool.Apply(_world);
+        _paths.Add("/pool/images/shop2");
+        _catalogFileOfShop2 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Format2Pool.Catalog("shop2", Format2Pool.VersionId("shop2"))));
+
+        var ex = await FailsAsync(await ValidAsync());
+
+        Assert.Equal(ErrorCodes.ImageExists, ex.Code);
+        AssertNothingWasWritten();
+    }
 
     [Fact]
     public async Task An_existing_image_is_image_exists_naming_as_and_nothing_is_written()

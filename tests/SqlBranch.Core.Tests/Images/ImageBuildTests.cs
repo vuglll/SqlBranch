@@ -26,6 +26,9 @@ public sealed partial class ImageBuildTests
     private long _free = 100 * Gib;
     private long _staged;
     private bool _imageExists;
+
+    /// <summary>What the engine says about the image folder on a format-2 pool: <c>none</c>, <c>legacy</c> or <c>catalog.json</c> as base64.</summary>
+    private string _catalogFile = "none";
     private int _fileQueries;
     private bool _renamed;
     private string _recoveryModel = "FULL";
@@ -70,6 +73,11 @@ public sealed partial class ImageBuildTests
             if (script.Contains("SQLBRANCH_FREE=", StringComparison.Ordinal))
             {
                 return FakeContainerRuntime.Ok($"SQLBRANCH_FREE={_free - _staged}");
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + _catalogFile);
             }
 
             if (script.Contains("SQLBRANCH_EXISTS=", StringComparison.Ordinal))
@@ -533,6 +541,44 @@ public sealed partial class ImageBuildTests
         Assert.Equal("image_exists", ErrorCode(run.Json));
         Assert.Empty(_world.Runtime.Copies);
         Assert.Empty(RemovedFolders());
+    }
+
+    [Fact]
+    public void Name_already_used_on_a_format_2_pool_is_image_exists_and_nothing_is_copied()
+    {
+        Format2Pool.Apply(_world);
+        _catalogFile = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"))));
+
+        var run = Build();
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("image_exists", ErrorCode(run.Json));
+        Assert.Empty(_world.Runtime.Copies);
+        Assert.False(Ran("SQLBRANCH_EXISTS="));
+    }
+
+    [Fact]
+    public void A_name_used_by_an_image_an_older_client_wrote_is_image_exists_on_a_format_2_pool()
+    {
+        Format2Pool.Apply(_world);
+        _catalogFile = "legacy";
+
+        var run = Build();
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("image_exists", ErrorCode(run.Json));
+        Assert.Empty(_world.Runtime.Copies);
+    }
+
+    [Fact]
+    public void A_name_whose_catalog_has_no_current_version_is_free_on_a_format_2_pool()
+    {
+        Format2Pool.Apply(_world);
+        _catalogFile = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Format2Pool.Catalog("shop", null)));
+
+        var run = Build();
+
+        Assert.NotEqual("image_exists", run.Exit == 0 ? string.Empty : ErrorCode(run.Json));
     }
 
     [Fact]

@@ -30,6 +30,9 @@ internal sealed class FakeInitHost
 
     public List<string> RemovingFolders { get; } = [];
 
+    /// <summary>The temporary files of a pool upgrade that the status listing finds, such as <c>credentials.json.new</c>.</summary>
+    public List<string> UpgradeTemporaryFiles { get; } = [];
+
     public List<string> BuildFolders { get; } = [];
 
     /// <summary>The <c>credential.json</c> of build folders, by build id.</summary>
@@ -53,6 +56,7 @@ internal sealed class FakeInitHost
             lines.AddRange(BranchFolders.Select(b => $"SQLBRANCH_BRANCH|{b.Name}|{(b.BranchJson ? 1 : 0)}|{(b.Next ? 1 : 0)}|{BranchRecords.GetValueOrDefault(b.Name)}"));
             lines.AddRange(ImageFolders.Select(i => $"SQLBRANCH_IMAGE|{i}"));
             lines.AddRange(RemovingFolders.Select(r => $"SQLBRANCH_REMOVING|{r}"));
+            lines.AddRange(UpgradeTemporaryFiles.Select(f => $"SQLBRANCH_UPGRADETEMP|{f}"));
             lines.AddRange(BuildFolders.Select(b => $"SQLBRANCH_BUILD|{b}"));
             lines.AddRange(CredentialMarkers.Select(m => $"SQLBRANCH_CRED|{m.Key}|{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(m.Value))}"));
             lines.Add(SpaceLine());

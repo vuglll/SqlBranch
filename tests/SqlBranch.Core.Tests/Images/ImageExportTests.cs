@@ -24,7 +24,10 @@ public sealed class ImageExportTests : IDisposable
     private readonly byte[] _data = new byte[1_500_000];
     private readonly byte[] _log = new byte[300_000];
     private readonly ImageManifest _manifest;
+
     private bool _imageExists = true;
+    private string? _credentialsJson;
+    private string? _catalogJson;
 
     /// <summary>Scripts what the engine's tar delivers.</summary>
     private Func<CancellationToken, FakeStreamingProcess> _tar;
@@ -43,7 +46,12 @@ public sealed class ImageExportTests : IDisposable
         _world.WithEngine();
         _world.Runtime.ExecHandler = (_, command) =>
             command.Count >= 3 && command[2] == ImageCatalog.ListingScript
-                ? FakeContainerRuntime.Ok(_imageExists ? $"SQLBRANCH_IMAGE|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}" : string.Empty)
+                ? FakeContainerRuntime.Ok(string.Join('\n', new[]
+                {
+                    _credentialsJson is null ? null : $"SQLBRANCH_POOLCRED|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_credentialsJson))}",
+                    _catalogJson is null ? null : $"SQLBRANCH_CATALOG|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_catalogJson))}",
+                    _imageExists ? $"SQLBRANCH_IMAGE|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}" : null,
+                }.Where(l => l is not null)))
                 : FakeContainerRuntime.Ok();
         _world.Runtime.StreamHandler = (_, _, _, token) => _tar(token);
     }
@@ -187,6 +195,29 @@ public sealed class ImageExportTests : IDisposable
         var command = Assert.Single(_world.Runtime.StreamExecs);
         Assert.Equal(["tar", "-C", "/pool/images/shop/data", "-cf", "-", "--", "shop.mdf", "shop_log.ldf"], command.Command);
         Assert.Equal(StreamDirection.Read, command.Direction);
+    }
+
+    [Fact]
+    public async Task On_a_format_2_pool_export_reads_the_current_version_of_the_name_from_its_catalog()
+    {
+        _credentialsJson = Format2Pool.Credentials();
+        _catalogJson = Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"));
+
+        var result = await Export(Dest());
+
+        Assert.Equal(2, result.Files);
+        Assert.Equal(["tar", "-C", "/pool/images/shop/data", "-cf", "-", "--", "shop.mdf", "shop_log.ldf"], Assert.Single(_world.Runtime.StreamExecs).Command);
+    }
+
+    [Fact]
+    public async Task On_a_format_2_pool_a_name_with_no_current_version_is_image_not_found()
+    {
+        _credentialsJson = Format2Pool.Credentials();
+        _catalogJson = Format2Pool.Catalog("shop", null);
+
+        var ex = await Assert.ThrowsAsync<SqlBranchException>(() => Export(Dest()));
+
+        Assert.Equal(SqlBranch.Core.Output.ErrorCodes.ImageNotFound, ex.Code);
     }
 
     [Fact]

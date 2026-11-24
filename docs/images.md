@@ -291,11 +291,39 @@ sqlbranch image list
 ```
 
 Shows each image's name, source database, total size, build time and the number
-of branches created from it. The count is the number of
+of branches created from it. On a format-2 pool the table adds a `VERSION`
+column and each JSON entry has `version`, the ID of the name's current version
+(null on a format-1 pool, and for an image an older client wrote after the
+upgrade and no command has adopted yet). The count is the number of
 `/pool/branches/*/branch.json` files that name the image. In JSON, each image
 has the fields above and `branches` (the count) and `branchNames`. A pool with
 no images lists none and exits 0. A manifest that cannot be read is reported as
 a warning and that image is not listed.
+
+## The image catalog (pool format 2)
+
+On a format-2 pool each image folder has `catalog.json`, the per-name catalog:
+
+```json
+{"format":1,"name":"shop","current":"shop@20261201T090000000Z",
+ "versions":[{"id":"shop@20261201T090000000Z","dir":"."}]}
+```
+
+`current` is the ID of the current version, or null when the name has none, and
+`dir` is the folder of that version's files relative to the image folder. The
+files at the top of the image folder (`manifest.json`, `data/`) are the first
+version, `dir` ".". A catalog is replaced by writing a temporary file in the same
+directory and renaming it over the old one.
+
+A name exists when its catalog has a non-null `current`, or when the folder has
+a `manifest.json` and no catalog, which is an image an older client wrote after
+the upgrade. `image list` (`version` per row), `image export`, the name check of
+`image build` and `image import` (exit 1 `image_exists`) and the image lookup of
+`branch create` read the catalog on a format-2 pool. An image with no catalog is
+listed with `version` null, exported from its top-level files and found by its
+manifest. These read-only commands never write a catalog. A catalog that cannot
+be read is a warning and the image is not listed. On a format-1 pool every one of
+these commands keeps the 0.2.2 behavior and ignores catalogs.
 
 ## Removing an image
 
@@ -319,6 +347,10 @@ and lists them. `--force` removes the image anyway. Branches keep working with
 their data in both clone modes, because the clone blocks are reference counted
 and a copy branch has its own files. They can no longer be reset, because the
 image they would be cloned from is gone, and `branch reset` says why.
+
+On a format-2 pool the catalog goes with the folder, and the JSON result lists
+the version IDs it held in `image.versions` (an empty list on a format-1 pool
+and for an image with no catalog).
 
 `image rm` takes the same lock as a build of that name, so the two cannot run
 at once. If one is running, the other exits 1.

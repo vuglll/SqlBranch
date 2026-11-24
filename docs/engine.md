@@ -107,6 +107,18 @@ A storage credential that a URL build made and could not drop (see
 `sqlbranch image build` drops it, deletes its record and the build folder, and
 `status` exits 0 again.
 
+Status also reports the pool format (see
+[The engine credentials file](#the-engine-credentials-file)): a `Pool format`
+line in text and `poolFormat` (an integer) in JSON, 1 for a pool that `init`
+made or SqlBranch 0.2.2 wrote and 2 for a pool in the newer format. A pool
+upgrade that did not finish appears as a `pool_upgrade` mismatch, and a
+temporary credentials file left by one as an `upgrade_leftover` mismatch, by
+name only, never with its content; both name `sqlbranch pool upgrade --yes`.
+`status` tests the upgrade lock with `APPLOCK_TEST` and never takes it. While
+the lock is held, the upgrade and its temporary file are shown as `In progress:
+pool upgrade is running` and `status` exits 0. Examples of the four states are
+in [cli-output.md](cli-output.md#status-and-the-pool-format).
+
 ### `sqlbranch doctor`
 
 Doctor reports the detected SqlPackage path and version in text and JSON.
@@ -178,11 +190,49 @@ named `sqlbranch-pool` that does not carry the `io.sqlbranch.managed=true`
 label is the user's own: it is not a pool, and `init`, `doctor` and
 `teardown` never write to it or delete from it.
 
+## The engine credentials file
+
+`/pool/engine/credentials.json` holds the engine's `sa` password. It is owned
+by the engine's user (10001) with mode 600 and is written through a short-lived
+work container, with the password on standard input only, never in an argument,
+an environment variable or a log. There are two formats:
+
+```json
+{"user":"sa","password":"..."}
+```
+
+Format 1 is what `init` writes and what SqlBranch 0.2.2 reads.
+
+```json
+{"format":2,"engine":{"user":"sa","password":"..."},
+ "upgrade":{"startedAt":"2026-12-01T09:00:00.000Z","state":"running"},
+ "note":"Written by SqlBranch 0.3 (pool format 2). ..."}
+```
+
+Format 2 nests the login under `engine`, records the upgrade (`state` is
+`running` until the upgrade finishes, then `done`) and carries a note for
+people who open the file. It has no top-level `password`, so a 0.2.x tool that
+reads it stops with "The engine credentials file in <pool> is not valid." before
+it takes a lock. That is the fence of the pool upgrade. This release reads both
+formats. A file that says a format above 2 is refused with `operation_failed`;
+the message names the format and tells the user to update the `sqlbranch` tool
+and the SqlBranch.Testing package.
+
+A format-2 file is written by a new path, not in place: the work container runs
+as root (the engine image's own user cannot change ownership), writes
+`credentials.json.new`, sets owner 10001:0 and mode 600, flushes it, renames it
+over `credentials.json` and flushes the directory. If a step before the rename
+fails, for example because the pool is full, the run deletes its own temporary
+file and leaves the old file as it was, so the pool keeps its format; a full pool
+is `pool_full`. A run that is killed before the rename leaves
+`credentials.json.new`, which `status` lists as an upgrade leftover (see
+[status](#sqlbranch-status)); after the rename none is left.
+
 ## Pool layout
 
 ```
 /pool/engine/                 system databases and credentials
-/pool/images/<name>/          sealed images
+/pool/images/<name>/          sealed images (format 2 adds catalog.json)
 /pool/branches/<name>/        branches
 /pool/import/                 backups used without a copy
 /pool/build/<id>/             staging for one image build

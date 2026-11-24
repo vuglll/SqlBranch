@@ -9,7 +9,11 @@ namespace SqlBranch.Core.Images;
 /// <summary>A removed image.</summary>
 /// <param name="Name">The image's name.</param>
 /// <param name="Branches">The branches that were created from it and keep their own files.</param>
-public sealed record ImageRemoval(string Name, IReadOnlyList<string> Branches);
+public sealed record ImageRemoval(string Name, IReadOnlyList<string> Branches)
+{
+    /// <summary>The version IDs removed with the name: from the catalog on a format-2 pool, empty on format 1 and for an image not adopted yet.</summary>
+    public IReadOnlyList<string> Versions { get; init; } = [];
+}
 
 /// <summary>
 /// <c>image rm</c> as design D5 describes it: the image folder is renamed to <c>.removing-&lt;name&gt;</c>
@@ -60,7 +64,7 @@ public sealed class ImageRemover
                 $"Another command is working on the image '{name}': a build or a removal is running. Wait for it to finish.");
         }
 
-        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken).ConfigureAwait(false);
+        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location).ConfigureAwait(false);
         var entry = listing.Images.FirstOrDefault(i => i.Name == name)
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
 
@@ -100,7 +104,7 @@ public sealed class ImageRemover
                 "'sqlbranch status' reports it. Delete that folder to finish.");
         }
 
-        return new ImageRemoval(name, entry.Branches);
+        return new ImageRemoval(name, entry.Branches) { Versions = entry.Versions };
     }
 
     private Task<ContainerResult> ExecAsync(string script, CancellationToken cancellationToken) =>

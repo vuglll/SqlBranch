@@ -122,6 +122,9 @@ public sealed partial class ImageBuilder
     /// <summary>The state of one build, kept so a failure can undo exactly what the build did.</summary>
     private sealed class State(ImageBuildRequest request, string id)
     {
+        /// <summary>The pool format read with the credentials: 1 or 2.</summary>
+        public int PoolFormat { get; init; } = 1;
+
         public ImageBuildRequest Request { get; } = request;
 
         public string Id { get; } = id;
@@ -210,9 +213,10 @@ public sealed partial class ImageBuilder
             throw new SqlBranchException(ErrorCodes.EngineStopped, "The engine is stopped. Run 'sqlbranch engine start' to start it.");
         }
 
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
@@ -224,7 +228,7 @@ public sealed partial class ImageBuilder
                 $"Another build of the image '{request.Name}' is running. Wait for it to finish, or choose another name.");
         }
 
-        var state = new State(request, _newId()) { EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
+        var state = new State(request, _newId()) { PoolFormat = credentials.Format, EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
         // The build lock is what lets status tell a running build from a dead one.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Build(state.Id), cancellationToken).ConfigureAwait(false))
         {
@@ -271,8 +275,7 @@ public sealed partial class ImageBuilder
         var request = state.Request;
 
         // 1. The name is free. The check runs under the lock, so a second build of the name cannot slip in.
-        var exists = await ShellAsync($"if [ -e {Quoting.Shell(ImagePaths.Image(request.Name))} ]; then echo SQLBRANCH_EXISTS=yes; else echo SQLBRANCH_EXISTS=no; fi", "checking the image name", cancellationToken).ConfigureAwait(false);
-        if (exists.Contains("SQLBRANCH_EXISTS=yes", StringComparison.Ordinal))
+        if (await ImageCatalog.NameExistsAsync(_runtime, _engineName, request.Name, state.PoolFormat, cancellationToken).ConfigureAwait(false))
         {
             throw new SqlBranchException(ErrorCodes.ImageExists, $"The image '{request.Name}' already exists. Remove it with 'sqlbranch image rm {request.Name}' or choose another name.");
         }

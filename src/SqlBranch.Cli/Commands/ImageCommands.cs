@@ -152,7 +152,7 @@ internal static partial class ImageCommands
     {
         var context = CommandContext.RequireAsync(services, redactor, configFile, CancellationToken.None).GetAwaiter().GetResult();
         ImageCatalog.RequireRunningEngine(context.Pool);
-        var listing = new ImageCatalog(services.Runtime, services.EngineName).ListAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var listing = new ImageCatalog(services.Runtime, services.EngineName).ListAsync(CancellationToken.None, context.Pool.Location).GetAwaiter().GetResult();
         return DescribeList(listing);
     }
 
@@ -177,6 +177,7 @@ internal static partial class ImageCommands
                 ["removed"] = true,
                 ["forced"] = force,
                 ["branches"] = new JsonArray([.. removal.Branches.Select(b => (JsonNode?)b)]),
+                ["versions"] = new JsonArray([.. removal.Versions.Select(v => (JsonNode?)v)]),
             },
         };
         return CommandResult.Success("image rm", payload, text, [removal.Name]);
@@ -498,8 +499,16 @@ internal static partial class ImageCommands
                 new ByteSize(Math.Max(i.Manifest.TotalBytes, 1)).ToBinary(),
                 i.Manifest.BuiltAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture),
                 i.Branches.Count.ToString(CultureInfo.InvariantCulture),
+                i.Version ?? "-",
             }).ToList();
-            string[] header = ["NAME", "SOURCE", "SOURCE DATABASE", "SIZE", "BUILT", "BRANCHES"];
+            string[] header = ["NAME", "SOURCE", "SOURCE DATABASE", "SIZE", "BUILT", "BRANCHES", "VERSION"];
+            if (listing.PoolFormat < 2)
+            {
+                // Format 1 keeps the 0.2.2 table.
+                header = header[..6];
+                rows = [.. rows.Select(r => r[..6])];
+            }
+
             var widths = header.Select((h, c) => Math.Max(h.Length, rows.Max(r => r[c].Length))).ToArray();
             string Line(string[] cells) => string.Join("  ", cells.Select((cell, c) => cell.PadRight(widths[c]))).TrimEnd();
             text.Add(Line(header));
@@ -513,6 +522,7 @@ internal static partial class ImageCommands
                 var node = ImageJson(i.Manifest);
                 node["branches"] = i.Branches.Count;
                 node["branchNames"] = new JsonArray([.. i.Branches.Select(b => (JsonNode?)b)]);
+                node["version"] = i.Version;
                 return (JsonNode?)node;
             })]),
         };

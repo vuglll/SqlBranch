@@ -75,6 +75,7 @@ internal static class StatusCommand
             $"Engine container: {report.Container} on 127.0.0.1:{port}",
             $"Pool: {report.Pool.Location}",
             $"Pool backend: {report.Pool.Backend}",
+            $"Pool format: {report.PoolFormat.ToString(CultureInfo.InvariantCulture)}",
             $"Clone mode: {mode}",
         };
 
@@ -116,6 +117,7 @@ internal static class StatusCommand
                 ["usedBytes"] = space.Used,
                 ["freeBytes"] = space.Free,
             },
+            ["poolFormat"] = report.PoolFormat,
             ["images"] = report.Images,
             ["branches"] = report.Branches,
             ["expiredBranches"] = new JsonArray([.. report.ExpiredBranches.Select(n => (JsonNode?)n)]),

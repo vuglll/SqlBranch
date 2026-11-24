@@ -120,7 +120,7 @@ public sealed class ImageExporter
         NameRules.ValidateImage(name);
         ImageCatalog.RequireRunningEngine(pool);
 
-        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken).ConfigureAwait(false);
+        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location).ConfigureAwait(false);
         return listing.Images.FirstOrDefault(i => i.Name == name)?.Manifest
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
     }

@@ -31,6 +31,9 @@ internal sealed class BranchEngine : IAsyncDisposable
         Session = session;
     }
 
+    /// <summary>The pool format read with the credentials: 1 or 2.</summary>
+    public int PoolFormat { get; private init; } = 1;
+
     public IContainerRuntime Runtime => _runtime;
 
     public string EngineName => _engineName;
@@ -53,14 +56,15 @@ internal sealed class BranchEngine : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(pool);
         var engine = ImageCatalog.RequireRunningEngine(pool);
-        var password = await EngineCredentials.ReadAsync(runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         redactor.Register(password);
 
         var endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort));
         var session = await connector.ConnectAsync(endpoint, password, cancellationToken).ConfigureAwait(false);
-        return new BranchEngine(runtime, engineName, password, endpoint, session);
+        return new BranchEngine(runtime, engineName, password, endpoint, session) { PoolFormat = credentials.Format };
     }
 
     public ValueTask DisposeAsync() => Session.DisposeAsync();

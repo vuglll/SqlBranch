@@ -22,6 +22,9 @@ public sealed partial class BranchCreateTests
     private readonly List<string> _timeline = [];
 
     private bool _imageExists = true;
+
+    /// <summary>What the engine says about <c>catalog.json</c> of the image: <c>none</c> or the file as base64.</summary>
+    private string _catalogFile = "none";
     private long _freeBytes = 1L << 40;
     private string _branchState = "none";
     private int _userDatabases;
@@ -53,6 +56,11 @@ public sealed partial class BranchCreateTests
             if (_failScript?.Invoke(script) == true)
             {
                 return FakeContainerRuntime.Fail(1, "boom");
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + _catalogFile);
             }
 
             if (script.Contains("SQLBRANCH_MANIFEST=", StringComparison.Ordinal))
