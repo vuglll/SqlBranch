@@ -113,6 +113,13 @@ public sealed class StatusReporter
         var mode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName).ConfigureAwait(false);
 
         var mismatches = new List<StatusMismatch>();
+        if (credentials.Format >= 2)
+        {
+            var images = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location).ConfigureAwait(false);
+            mismatches.AddRange(images.Images.Where(i => i.CatalogReadable == false)
+                .Select(i => new StatusMismatch("image_catalog", i.Name, ImageCatalog.InvalidCatalog(i.Name).Message)));
+        }
+
         var inProgress = new List<string>();
         await FindMismatchesAsync(session, databases, listing, mismatches, inProgress, cancellationToken).ConfigureAwait(false);
         await FindUpgradeAsync(session, credentials, listing, mismatches, inProgress, cancellationToken).ConfigureAwait(false);

@@ -92,4 +92,53 @@ public sealed partial class ImageBuildTests
         Assert.True(Ran("rm -rf '/pool/images/shop'"));
         Assert.Equal("operation_failed", ErrorCode(run.Json));
     }
+    [Fact]
+    public void Build_of_a_name_with_an_unreadable_catalog_fails_without_writing()
+    {
+        Format2Pool.Apply(_world);
+        _catalogFile = Convert.ToBase64String(Encoding.UTF8.GetBytes("{not json"));
+        var run = Build();
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("operation_failed", ErrorCode(run.Json));
+        Assert.Contains("sqlbranch image rm shop", run.Json.GetProperty("error").GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Empty(_world.Runtime.Copies);
+        Assert.Empty(RemovedFolders());
+        Assert.False(Ran("mkdir"));
+    }
+
+    [Fact]
+    public void Removing_an_unreadable_catalog_then_rebuilding_in_the_same_millisecond_keeps_the_high_water_mark()
+    {
+        Format2Pool.Apply(_world);
+        _world.Clock = new SetClock(Noon);
+        _lastId = "shop@20261201T020000000Z";
+        _catalogFile = Convert.ToBase64String(Encoding.UTF8.GetBytes("{not json"));
+        var inner = _world.Runtime.ExecHandler;
+        _world.Runtime.ExecHandler = (container, command) =>
+        {
+            var script = command.Count >= 3 ? command[2] : "";
+            if (script == SqlBranch.Core.Images.ImageCatalog.ListingScript)
+            {
+                return FakeContainerRuntime.Ok(_catalogFile == "none" ? "SQLBRANCH_POOLCRED|2"
+                    : $"SQLBRANCH_POOLCRED|2\nSQLBRANCH_CATALOG|shop|{_catalogFile}");
+            }
+            if (script.Contains("mv -T '/pool/images/shop'", StringComparison.Ordinal))
+            {
+                _catalogFile = "none";
+                return FakeContainerRuntime.Ok("SQLBRANCH_RENAMED=yes");
+            }
+            Assert.False(script.Contains("rm ", StringComparison.Ordinal) && script.Contains("/pool/images/.ids", StringComparison.Ordinal));
+            return inner(container, command);
+        };
+
+        var removed = _world.Run("image", "rm", "shop", "--format", "json");
+        Assert.Equal(0, removed.Exit);
+        Assert.Empty(JsonDocument.Parse(removed.Out).RootElement.GetProperty("image").GetProperty("versions").EnumerateArray());
+        Assert.Empty(JsonDocument.Parse(_world.Run("image", "list", "--format", "json").Out).RootElement.GetProperty("images").EnumerateArray());
+        Assert.Equal("shop@20261201T020000000Z", _lastId);
+        var rebuilt = Build();
+        Assert.Equal(0, rebuilt.Exit);
+        Assert.Equal("shop@20261201T020000001Z", rebuilt.Json.GetProperty("image").GetProperty("version").GetString());
+    }
+
 }

@@ -10,12 +10,15 @@ namespace SqlBranch.Core.Images;
 
 /// <summary>One image as <c>image list</c> shows it.</summary>
 /// <param name="Name">The image's folder name, which is the name the commands use.</param>
-/// <param name="Manifest">The image's manifest.</param>
+/// <param name="Manifest">The image's manifest, or null when an unreadable catalog has no readable top-level manifest.</param>
 /// <param name="Branches">The names of the branches created from it, in order.</param>
-public sealed record ImageEntry(string Name, ImageManifest Manifest, IReadOnlyList<string> Branches)
+public sealed record ImageEntry(string Name, ImageManifest? Manifest, IReadOnlyList<string> Branches)
 {
     /// <summary>The current version's ID on a format-2 pool; null on format 1 and for an image no command has adopted yet (D3a).</summary>
     public string? Version { get; init; }
+
+    /// <summary>False for an unreadable catalog, true for other format-2 rows, null on format 1.</summary>
+    public bool? CatalogReadable { get; init; }
 
     /// <summary>The folder of the version's files, relative to the image folder.</summary>
     public string Directory { get; init; } = ".";
@@ -54,6 +57,7 @@ public sealed class ImageCatalog
     public const string ListingScript =
         "if [ -f /pool/engine/credentials.json ]; then g=$(grep -m1 -o '\"format\"[[:space:]]*:[[:space:]]*[0-9]*' /pool/engine/credentials.json 2>/dev/null); " +
         "if [ $? -ge 2 ]; then echo \"SQLBRANCH_POOLCRED|unreadable\"; else n=$(printf %s \"$g\" | tr -cd 0-9); echo \"SQLBRANCH_POOLCRED|${n:-1}\"; fi; fi; " +
+        "[ -d /pool/images/.ids ] && echo SQLBRANCH_FORMAT2CONTENT; " +
         "for d in /pool/images/*/; do n=$(basename \"$d\"); " +
         "[ -f \"${d}catalog.json\" ] && echo \"SQLBRANCH_CATALOG|$n|$(base64 -w0 \"${d}catalog.json\")\"; " +
         "for v in \"${d}\"versions/*/; do [ -f \"${v}manifest.json\" ] && echo \"SQLBRANCH_VMANIFEST|$n|versions/$(basename \"$v\")|$(base64 -w0 \"${v}manifest.json\")\"; done; " +
@@ -103,7 +107,7 @@ public sealed class ImageCatalog
         var branchImages = new List<(string Branch, string? Image)>();
         var catalogs = new Dictionary<string, string>(StringComparer.Ordinal);
         var versionManifests = new Dictionary<(string Name, string Dir), string>();
-        var format = 1;
+        var formatHint = "1";
 
         foreach (var line in result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -116,7 +120,7 @@ public sealed class ImageCatalog
             switch (parts[0])
             {
                 case CredentialsTag:
-                    format = FormatOf(parts[1], pool);
+                    formatHint = parts[1];
                     break;
                 case CatalogTag when parts.Length >= 3:
                     catalogs[parts[1]] = parts[2];
@@ -149,6 +153,21 @@ public sealed class ImageCatalog
             }
         }
 
+        int format;
+        // A format hint from grep cannot validate JSON. With format-2 content, use the
+        // credentials reader so damaged credentials cannot silently expose a format-1 view.
+        if (pool is not null && (catalogs.Count > 0 || result.StdOut.Contains("SQLBRANCH_FORMAT2CONTENT", StringComparison.Ordinal)))
+        {
+            var engine = await _runtime.InspectAsync(_engineName, cancellationToken).ConfigureAwait(false)
+                ?? throw new SqlBranchException(ErrorCodes.OperationFailed, "The engine container could not be found.");
+            var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool, cancellationToken).ConfigureAwait(false);
+            format = credentials?.Format ?? FormatOf(formatHint, pool);
+        }
+        else
+        {
+            format = FormatOf(formatHint, pool);
+        }
+
         var entries = new List<ImageEntry>();
         if (format < 2)
         {
@@ -168,7 +187,7 @@ public sealed class ImageCatalog
                     // Written by an older client after the upgrade and not adopted yet (D3a): no version ID.
                     if (manifests.TryGetValue(name, out var legacy))
                     {
-                        entries.Add(new ImageEntry(name, legacy, BranchesOf(branchImages, name)));
+                        entries.Add(new ImageEntry(name, legacy, BranchesOf(branchImages, name)) { CatalogReadable = true });
                     }
 
                     continue;
@@ -177,7 +196,7 @@ public sealed class ImageCatalog
                 var catalog = TryParseCatalog(catalogText);
                 if (catalog is null)
                 {
-                    warnings.Add($"The catalog of the image folder {ImagePaths.Image(name)} cannot be read, so the image is not listed.");
+                    entries.Add(new ImageEntry(name, manifests.GetValueOrDefault(name), BranchesOf(branchImages, name)) { CatalogReadable = false });
                     continue;
                 }
 
@@ -199,7 +218,7 @@ public sealed class ImageCatalog
                     continue;
                 }
 
-                entries.Add(new ImageEntry(name, manifest, BranchesOf(branchImages, name)) { Version = catalog.Current, Directory = directory!, Versions = [.. catalog.Versions.Select(v => v.Id)] });
+                entries.Add(new ImageEntry(name, manifest, BranchesOf(branchImages, name)) { CatalogReadable = true, Version = catalog.Current, Directory = directory!, Versions = [.. catalog.Versions.Select(v => v.Id)] });
             }
         }
 
@@ -269,7 +288,7 @@ public sealed class ImageCatalog
         {
             null or "none" => false,
             "legacy" => true,
-            _ => TryParseCatalog(value) is not { Current: null },
+            _ => (TryParseCatalog(value) ?? throw InvalidCatalog(name)).Current is not null,
         };
     }
 
@@ -309,7 +328,7 @@ public sealed class ImageCatalog
         else
         {
             var catalog = TryParseCatalog(value)
-                ?? throw new SqlBranchException(ErrorCodes.OperationFailed, $"The catalog of the image '{name}' cannot be read, so no branch can be made from it.");
+                ?? throw InvalidCatalog(name);
             id = versionId ?? catalog.Current;
             var entry = id is null ? null : catalog.Versions.FirstOrDefault(v => v.Id == id);
             if (entry is null)
@@ -335,6 +354,9 @@ public sealed class ImageCatalog
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed, $"The manifest of the image '{name}' cannot be read, so no branch can be made from it.");
         return new ImageVersionData(id, directory, manifest);
     }
+
+    internal static SqlBranchException InvalidCatalog(string name) =>
+        new(ErrorCodes.OperationFailed, $"The catalog of the image '{name}' is not valid. Run 'sqlbranch image rm {name}' to remove it.");
 
     private static ImageManifest? TryParseManifest(string base64)
     {
