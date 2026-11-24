@@ -26,6 +26,7 @@ When a setting is given in more than one place, the first of these wins:
 | `port` | `SQLBRANCH_PORT` | `14330` | Engine port on 127.0.0.1. |
 | `requireThin` | `SQLBRANCH_REQUIRE_THIN` | `false` | Refuse to create thin-mode branches as full copies. |
 | `defaultImage` | `SQLBRANCH_DEFAULT_IMAGE` | (none) | Image `branch create` uses without `--from`. |
+| `publishWait` | `SQLBRANCH_PUBLISH_WAIT` | `10m` | How long a command waits for running image and branch operations: `1m` to `1440m` or `1h` to `24h`. |
 
 Details:
 
@@ -48,6 +49,14 @@ Details:
   later. When the image tag names an older release (`2022-latest`), the
   setting is refused at once; when the tag names none, it is checked after
   the engine starts.
+- **`publishWait`**: how long a command that must wait for running image
+  and branch operations (`sqlbranch pool upgrade` today) waits before it
+  exits 1 with `error.code` `catalog_busy`. A value is a whole number
+  followed by `m` (1 to 1440) or `h` (1 to 24); `10m` and `007m` are fine,
+  `0m`, `10`, `10s`, `1.5h`, `25h` and `1441m` are not. A bad value makes
+  every command exit 2 with `config_error`, naming `publishWait` and where
+  the value came from, before any Docker command. The usual precedence
+  applies: flag, environment variable, config files, default.
 - **`engineImage`, `engineEdition`, `port` and `pool`** are fixed when the
   engine is first created. A later `init` with a different value is refused.
 

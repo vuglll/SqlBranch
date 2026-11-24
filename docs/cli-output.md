@@ -48,6 +48,8 @@ names the flag that supplies it, for example `--force`.
 | `error` | on failure | An object with `code` (stable, from the table below) and `message` (for people; may change). |
 | other fields | per command | The command's result, documented with each command. |
 
+Fields added by the pool format 2 change (`poolFormat`, `version`, `imageVersion`, `imageRemoved` and the like, documented with each command) are additive under `schemaVersion` 1: nothing is removed and no meaning changes. On a format-1 pool they are `null` or `[]`.
+
 On failure:
 
 ```json
@@ -203,4 +205,6 @@ Without an explicit path, Docker failure reports `docker_unavailable`.
 | `archive_corrupt` | 1 | An archive's SHA-256 or size differs from its checksum list, the checksum list is missing, or the archive ends early. The message names the file. |
 | `storage_unreachable` | 1 | `image export`, `image import` or a BACPAC build could not reach the storage at its `https://` or `s3://` URL, was refused its secret, did not trust its certificate, found no object, or could not finish reading it. The message has the URL without its query and the reason (never a secret). |
 | `mismatch` | 1 | `status` found state that does not match, such as a branch folder with no database. |
+| `catalog_busy` | 1 | A command waited `publishWait` for running image or branch operations and gave up, or met an operation it must not wait for. The message names what is busy. |
+| `pool_upgrade_required` | 3 | A pool upgrade did not finish, or the command needs pool format 2. The message names `sqlbranch pool upgrade --yes`. |
 | `operation_failed` | 1 | The operation failed for a reason with no more specific code. |

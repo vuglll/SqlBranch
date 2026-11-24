@@ -121,6 +121,12 @@ public static class ErrorCodes
 
     public static readonly ErrorCode SkillExists = new("skill_exists", ExitCode.OperationFailed);
 
+    /// <summary>A command waited <c>publishWait</c> for running image or branch operations and gave up, or met one it must not wait for.</summary>
+    public static readonly ErrorCode CatalogBusy = new("catalog_busy", ExitCode.OperationFailed);
+
+    /// <summary>A pool upgrade did not finish, or the command needs pool format 2. The message names <c>sqlbranch pool upgrade --yes</c>.</summary>
+    public static readonly ErrorCode PoolUpgradeRequired = new("pool_upgrade_required", ExitCode.EnvironmentNotReady);
+
     /// <summary>The operation failed for a reason with no more specific code.</summary>
     public static readonly ErrorCode OperationFailed = new("operation_failed", ExitCode.OperationFailed);
 
@@ -131,6 +137,6 @@ public static class ErrorCodes
         DockerUnavailable, NotInitialized, CheckFailed, SqlPackageMissing, EngineNotReady, EngineStopped, PoolNotMounted, PoolUnavailable,
         HostDiskFull, ThinRequired, ForeignContainer,
         InitFailed, PoolFull, TempFull, BacpacInvalid, ImageNotFound, ImageExists, ImageInUse, BranchNotFound, BranchExists,
-        NotABackup, UnsupportedBackupType, GuestDatabase, ScriptFailed, DdlTrigger, UnsupportedFeature, VersionMismatch, BackupUnreachable, CredentialConflict, UnsupportedSource, DestinationExists, ArchiveInvalid, ArchiveCorrupt, StorageUnreachable, Mismatch, SkillExists, OperationFailed,
+        NotABackup, UnsupportedBackupType, GuestDatabase, ScriptFailed, DdlTrigger, UnsupportedFeature, VersionMismatch, BackupUnreachable, CredentialConflict, UnsupportedSource, DestinationExists, ArchiveInvalid, ArchiveCorrupt, StorageUnreachable, Mismatch, SkillExists, CatalogBusy, PoolUpgradeRequired, OperationFailed,
     ];
 }
