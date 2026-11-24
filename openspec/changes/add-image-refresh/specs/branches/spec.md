@@ -28,13 +28,39 @@ On a pool that uses format 2, when the version a branch was created from was rem
 - **WHEN** the clone mode is `thin` or `copy`, branch `old1` got an unknown base from `sqlbranch pool upgrade --yes`, and has local writes
 - **THEN** `sqlbranch branch reset old1` exits with code 1, `error.code` is "image_not_found", the message names `sqlbranch branch reset old1 --latest`, and `old1` keeps its writes
 
+### Requirement: A broken branch can be reset again
+Running `branch reset` on a `broken` branch SHALL retry the reset to the same base, with the same removed-base and unknown-base checks as for an online branch. A plain reset SHALL retry the base recorded before the failed reset; `branch reset <name> --latest` SHALL move the branch to the image's current version.
+
+#### Scenario: Retry after a failed reset
+- **WHEN** the clone mode is `thin`, branch `pr-142` is `broken`, and the user runs `sqlbranch branch reset pr-142`
+- **THEN** the command exits with code 0 and `sqlbranch branch list` shows `pr-142` as `online`
+
+#### Scenario: Plain retry keeps the old base
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `dev1` was created from `shop@20261201T020000000Z`, the current version is `shop@20261202T020000000Z`, `dev1` became `broken` when attaching failed during `sqlbranch branch reset dev1 --latest`, and the fault is removed
+- **THEN** `sqlbranch branch reset dev1 --format json` exits 0, `branch.imageVersion` is "shop@20261201T020000000Z", and `dev1` holds that version's rows
+
+#### Scenario: Latest retry moves to the current version
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `dev1` was created from `shop@20261201T020000000Z`, the current version is `shop@20261202T020000000Z`, `dev1` became `broken` when attaching failed during a plain `sqlbranch branch reset dev1`, and the fault is removed
+- **THEN** `sqlbranch branch reset dev1 --latest --format json` exits 0, `branch.imageVersion` is "shop@20261202T020000000Z", and `dev1` holds that version's rows
+
 ## ADDED Requirements
+
+### Requirement: Create and reset retry a brief catalog hold
+On a pool that uses format 2, when a `branch create` or `branch reset` finds the image's catalog held exclusively by a publication, an `image rm` or an `image prune`, it SHALL retry without queueing for up to 30 seconds. If the hold lasts longer it MUST exit 1 with `error.code` "catalog_busy", name the image, and change nothing.
+
+#### Scenario: Hold ends within the retry
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, a publication of shop holds its catalog exclusively for 2 seconds (tested with a fake runtime and a fake clock), and the user runs `sqlbranch branch create dev9 --from shop` during the hold
+- **THEN** the command exits with code 0 and `dev9` uses the version that is current after the hold
+
+#### Scenario: Hold outlasts the retry
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, an `image rm shop --force` holds shop's catalog exclusively for 31 seconds (tested with a fake runtime and a fake clock), and the user runs `sqlbranch branch reset dev1` during the hold
+- **THEN** the command exits with code 1 at the 30-second mark, `error.code` is "catalog_busy", the message names shop, and `dev1` is online with its data unchanged
 
 ### Requirement: List shows whether a branch is behind
 On a pool that uses format 2, `branch list` SHALL show for each branch, online, offline, broken or expired, whether its base is behind the current version of its image. A base whose version was removed SHALL be shown as removed, also after the name was used again.
 
 #### Scenario: Branch created before an upgrade, after the first refresh
-- **WHEN** the clone mode is `thin` or `copy`, `dev1` was created from shop on a pool that uses format 1, `sqlbranch pool upgrade --yes` then gave shop the version `shop@20261201T090000000Z`, and a refresh published `shop@20261202T020000000Z`
+- **WHEN** the clone mode is `thin` or `copy`, `dev1` was created from shop on a pool that uses format 1 after shop was last built, `sqlbranch pool upgrade --yes` then gave shop the version `shop@20261201T090000000Z` and pinned `dev1` to it, and a refresh published `shop@20261202T020000000Z`
 - **THEN** `dev1` still reads its local edits, and `sqlbranch branch list --format json` shows `dev1` with `state` "online", `imageVersion` "shop@20261201T090000000Z" and `outdated` true
 - **AND** a branch `dev2` created after the refresh shows `imageVersion` "shop@20261202T020000000Z" and `outdated` false
 
@@ -44,6 +70,10 @@ Each `branch list` row SHALL add `outdated`: on a pool that uses format 2, true 
 #### Scenario: Removed base in JSON
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `dev1` was created from `shop@20261119T020000000Z`, shop was then removed with `--force`, and no reset has occurred
 - **THEN** `sqlbranch branch list --format json` exits 0 and the `dev1` row has `imageVersion` "shop@20261119T020000000Z", `imageRemoved` true, `outdated` null and `state` "online"
+
+#### Scenario: Removed base after the name was reused
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `dev1` was created from `shop@20261201T090000000Z`, shop was removed with `--force`, and `sqlbranch image build shop --from-bak shop.bak` then published `shop@20261203T020000000Z`
+- **THEN** `sqlbranch branch list --format json` exits 0 and the `dev1` row has `imageVersion` "shop@20261201T090000000Z", `imageRemoved` true and `outdated` null
 
 #### Scenario: List on a format-1 pool
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, and `dev1` was created from shop
@@ -58,7 +88,7 @@ On a pool that uses format 2, `branch reset <name> --latest` SHALL return the br
 
 #### Scenario: Latest keeps the copy policy and labels
 - **WHEN** the clone mode is `thin`, `bench1` was created with `--copy --label team=red`, and the user runs `sqlbranch branch reset bench1 --latest`
-- **THEN** the command exits with code 0 and `sqlbranch branch list --format json` shows `bench1` as a full copy with label `team` "red" and its old expiry time
+- **THEN** the command exits with code 0 and `sqlbranch branch list --format json` shows `bench1` as a full copy with label `team` "red", `ephemeral` false and `expiresAt` null, as before the reset
 
 ### Requirement: Latest needs a current version
 When the image name has no current version, `branch reset <name> --latest` MUST exit 1 with `error.code` "image_not_found" before closing any connection, and leave the branch online with its data and no staged reset files.

@@ -17,7 +17,7 @@ A build or import with the name of an existing image MUST fail without changing 
 - **THEN** `sqlbranch image build crm --from-bak crm.bak` exits with code 1, `error.code` is "image_exists", and crm's files are unchanged
 
 ### Requirement: Remove an image
-`sqlbranch image rm <name>` SHALL remove the image's files and manifest, and MUST NOT delete or change any branch file. On a pool that uses format 2 it SHALL remove the name from the image catalog, and its JSON `image.versions` SHALL list the removed version IDs. On a pool that uses format 1, `image.versions` SHALL be [].
+`sqlbranch image rm <name>` SHALL remove the image's files and manifest, and MUST NOT delete or change any branch file. On a pool that uses format 2 it SHALL remove the name from the image catalog, and its JSON `image.versions` SHALL list the removed version IDs. On a pool that uses format 1, and for an image written in the format-1 layout that no command has adopted yet, `image.versions` SHALL be [].
 
 #### Scenario: Unused image
 - **WHEN** the clone mode is `thin` or `copy`, image `crm` has no branches, and the user runs `sqlbranch image rm crm`
@@ -34,6 +34,10 @@ A build or import with the name of an existing image MUST fail without changing 
 #### Scenario: Remove on a format-1 pool
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, crm has no branches, and the user runs `sqlbranch image rm crm --format json`
 - **THEN** the command exits with code 0 and `image.versions` is []
+
+#### Scenario: Remove an image not adopted yet
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, image `crm` was written in the 0.2.2 layout after the upgrade (tested by writing its files directly) and has no branches, and the user runs `sqlbranch image rm crm --format json`
+- **THEN** the command exits with code 0, `image.versions` is [], and `sqlbranch image list` no longer shows crm
 
 ## ADDED Requirements
 
@@ -71,7 +75,7 @@ A version ID MUST NOT be accepted where an image name is expected. Such input MU
 - **THEN** the command exits with code 2, `error.code` is "invalid_name", and no Docker command runs
 
 ### Requirement: Build JSON reports the version
-With `--format json`, a successful `image build` or `image import` SHALL add `image.version` to its existing fields, which keep their types and meanings: the version ID (string) on a pool that uses format 2, and null on a pool that uses format 1. `image list` rows SHALL add `version` the same way.
+With `--format json`, a successful `image build` or `image import` SHALL add `image.version` to its existing fields, which keep their types and meanings: the version ID (string) on a pool that uses format 2, and null on a pool that uses format 1. `image list` rows SHALL add `version` the same way, null also for an image written in the format-1 layout that no command has adopted yet.
 
 #### Scenario: Version in build JSON
 - **WHEN** the clone mode is `copy`, the pool uses format 2, and `sqlbranch image build shop --from-scripts db --format json` publishes at 2026-12-01T02:00:00.000Z (tested with a fake clock)

@@ -87,3 +87,70 @@ Still to verify with the released 0.2.2 tool and SqlBranch.Testing 0.2.2
 (task 5.1 of `add-pool-format-upgrade`): that the observed message and exit
 code match points 1 to 5 on a real upgraded pool. Whether 0.2.2 `image list`
 ignores the new fields in `branch.json` is task 1.2.
+
+## Facts checked for the second revision (2026-11-24)
+
+Source: repository code at commit b6a8b1f (`Directory.Build.props` version
+0.2.2; `git diff 6eaa894 HEAD` shows no change to the files below since the
+0.2.2 release commit), read 2026-11-24. The repository has no source for
+0.2.0 or 0.2.1 (no tags; the first public commit is 0.2.2), so their behavior
+is settled only by task 5.1, which installs all three versions from NuGet
+(maintainer decision 10).
+
+1. **Credentials read and write.** `EngineCredentials.ReadAsync`
+   ([src/SqlBranch.Core/Engine/EngineCredentials.cs](../../src/SqlBranch.Core/Engine/EngineCredentials.cs),
+   line 33) runs `PoolWork.RunAsync` with `readOnly: true`: a short-lived work
+   container with the pool mounted, not the engine. `WriteAsync` (lines 70-72)
+   writes in place: `umask 077; cat > credentials.json; chown; chmod 600`.
+   There is no temporary file, sync or rename today, so the format-2 rewrite
+   is a new write path.
+2. **Engine state is checked before the credentials.** 0.2.2 `status` returns
+   `engine_stopped` (exit 3) from the container state without reading the
+   credentials
+   ([src/SqlBranch.Cli/Commands/StatusCommand.cs](../../src/SqlBranch.Cli/Commands/StatusCommand.cs),
+   lines 36-39). Branch commands (`BranchEngine.OpenAsync` lines 55-56,
+   `BranchLister` lines 98-99), `image rm` (`ImageRemover` lines 47-49),
+   `image build` and `image import` (`ImageCommands.cs` line 154,
+   `ImageCommands.Bacpac.cs` line 51) call `ImageCatalog.RequireRunningEngine`
+   before `EngineCredentials.ReadAsync`. `engine start`
+   (`EngineStarter.cs` line 104) and `init` on an existing pool
+   (`EngineInitializer.cs` line 140) read the credentials themselves. So on an
+   upgraded pool, 0.2.2 commands exit 1 with the credentials message only while
+   the engine runs; with the engine stopped they report `engine_stopped` as
+   before, except `engine start` and `init`.
+3. **Build time in the manifest.** `ImageManifest` stores `builtAt`
+   ([src/SqlBranch.Core/Images/ImageManifest.cs](../../src/SqlBranch.Core/Images/ImageManifest.cs),
+   line 33). A build sets it from the client's clock, `_time.GetUtcNow()`
+   ([src/SqlBranch.Core/Images/ImageBuilder.cs](../../src/SqlBranch.Core/Images/ImageBuilder.cs),
+   line 634), for every source (backup file, URL, scripts, BACPAC). An import
+   keeps the archive's value: `state.Manifest = source with { Name = state.Target }`
+   ([src/SqlBranch.Core/Images/ImageImporter.cs](../../src/SqlBranch.Core/Images/ImageImporter.cs),
+   line 262), so an imported image's `builtAt` is the producer's build time,
+   at or before the local import. A branch's `createdAt` also comes from the
+   client's clock (`BranchCreator.cs` line 117). `manifest.json`'s
+   modification time instead comes from the engine container's clock, which
+   on macOS and Windows is a VM clock that can drift from the host.
+4. **Fixture fix text.** `FixtureHost.Failure`
+   ([src/SqlBranch.Testing/FixtureHost.cs](../../src/SqlBranch.Testing/FixtureHost.cs),
+   line 101) maps `image_not_found` to the fix `sqlbranch image build <image>`
+   and appends "Run '<fix>'." unless the message already holds it. For a
+   removed or unknown base that fix is wrong (the fix is a new branch), so the
+   reset path must override it.
+5. **Availability check.** `FixtureHost.IsAvailableAsync` (lines 34-43) opens
+   `BranchEngine.OpenAsync` and returns false on any exception; it writes no
+   log line today.
+6. **Boolean options accept values.** Checked by running the 0.2.2 Release
+   build (`src/SqlBranch.Cli/bin/Release/net10.0/sqlbranch.dll`, System.CommandLine
+   3.0.0) on 2026-11-24: `sqlbranch skill export --force=true`,
+   `--force true` and `--force --force` all exit 0; `--force=yes` exits 2
+   `usage_error`. Refusing `pool upgrade --yes=true`, `--yes true` and
+   `--yes --yes` therefore needs custom parsing and its own test.
+
+Still not verified, and settled by tasks of the change:
+
+| Question | Settled by |
+|---|---|
+| Can `docker exec` in the running engine read the 600, uid-10001 credentials file, so the format re-read after locking needs no extra work container? | Task 4.6 (falls back to a work container if not) |
+| Fixture create throughput on a format-2 pool compared with format 1 | Task 4.6 |
+| Is a pool-wide session application lock (`sqlbranch:pool-upgrade`) released when the upgrading client is killed? | Task 1.1, same check as the other session locks |
+| What 0.2.0 and 0.2.1 (tool and SqlBranch.Testing) do on an upgraded pool | Task 5.1 |

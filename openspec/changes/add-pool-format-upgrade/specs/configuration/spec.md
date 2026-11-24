@@ -29,5 +29,5 @@ A `publishWait` value that is not a whole number from 1 to 1440 followed by `m`,
 - **THEN** each run exits with code 2, `error.code` is "config_error", the message names `publishWait` and its source, and no Docker command runs
 
 #### Scenario: Largest values are accepted
-- **WHEN** `SQLBRANCH_PUBLISH_WAIT` is `24h`, then `1440m`, then `007m`, and the user runs `sqlbranch pool upgrade --yes` on a machine where Docker is not running
+- **WHEN** `SQLBRANCH_PUBLISH_WAIT` is `24h`, then `1440m`, then `007m`, and the user runs `sqlbranch branch list` on a machine where Docker is not running
 - **THEN** each run exits with code 3 and `error.code` is "docker_unavailable", not a configuration error

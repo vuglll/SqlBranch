@@ -1,12 +1,16 @@
 ## MODIFIED Requirements
 
 ### Requirement: Reset from test code
-The object returned by the create operation SHALL offer a reset operation that returns the branch to the image version it was created from and keeps its name, connection string, expiry time and labels. Reset SHALL NOT move the branch to a newer version of the image.
+The object returned by the create operation SHALL offer a reset operation that returns the branch to its base and keeps its name, connection string, expiry time and labels. On a pool that uses format 2 the base is the image version the branch was created from; on a pool that uses format 1 it is the image. Reset SHALL NOT move the branch to a newer version of the image.
 
 #### Scenario: Reset between tests
 - **WHEN** the clone mode is `thin` or `copy`, a test deletes all rows from table `Customers` and the next test calls reset
 - **THEN** `Customers` has the image's rows again
 - **AND** the connection string and the expiry time are unchanged
+
+#### Scenario: Fixture reset on a format-2 pool
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, a fixture branch was created from `shop@20261201T090000000Z`, and the test deletes all rows from `Customers` and calls reset
+- **THEN** `Customers` has the rows of `shop@20261201T090000000Z` again and `sqlbranch branch list --format json` shows the branch with `imageVersion` "shop@20261201T090000000Z"
 
 #### Scenario: Reset after the source image is refreshed
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, a fixture branch was created from `shop@20261201T020000000Z` whose `Customers` holds only row 1, shop is then replaced by `shop@20261202T020000000Z` whose `Customers` holds only row 2, and the test deletes row 1 and calls reset

@@ -12,7 +12,7 @@ On a pool that uses format 2, `sqlbranch status` SHALL also list, as mismatches 
 - **THEN** `sqlbranch status` exits with code 0 and shows the build of shop as in progress
 
 ### Requirement: Commands that need pool format 2
-On a pool that uses format 1, `image build --replace`, `image import --replace`, `image list --versions`, `image prune` and `branch reset --latest` MUST exit with code 3 and `error.code` "pool_upgrade_required", change nothing, and name `sqlbranch pool upgrade --yes` and that SqlBranch 0.2.x tools cannot use an upgraded pool. Input and configuration checks (exit 2), `not_initialized` and `engine_stopped` SHALL come first.
+On a pool that uses format 1, `image build --replace`, `image import --replace`, `image list --versions`, `image prune` and `branch reset --latest` MUST exit 3 with `error.code` "pool_upgrade_required", change nothing, and name `sqlbranch pool upgrade --yes` and that SqlBranch 0.2.x tools cannot use an upgraded pool. Exit-2 checks and the earlier environment errors SHALL come first.
 
 #### Scenario: Prune on a format-1 pool
 - **WHEN** the pool uses format 1 and the user runs `sqlbranch image prune --keep 1`
@@ -29,3 +29,11 @@ On a pool that uses format 1, `image build --replace`, `image import --replace`,
 #### Scenario: Replacement on a format-1 pool
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1 with image shop, and the user runs `sqlbranch image build shop --from-bak next.bak --replace`
 - **THEN** the command exits with code 3, `error.code` is "pool_upgrade_required", no restore runs, and `sqlbranch status --format json` still reports `poolFormat` 1
+
+### Requirement: Refresh options during an unfinished upgrade
+While a pool upgrade has not finished, `image build --replace`, `image import --replace`, `image prune` and `branch reset --latest` MUST exit 3 with `error.code` "pool_upgrade_required" like every other command that changes images or branches. `image list --versions` is a read and SHALL keep working, showing an image not catalogued yet with `version` null.
+
+#### Scenario: Versions during an unfinished upgrade
+- **WHEN** `sqlbranch pool upgrade --yes` was killed after it recorded `shop@20261201T090000000Z` and before it recorded crm, and the user runs `sqlbranch image list --versions --format json` and then `sqlbranch image prune --keep 1`
+- **THEN** the list exits with code 0 and shows shop with `shop@20261201T090000000Z` and crm with `version` null
+- **AND** the prune exits with code 3, `error.code` is "pool_upgrade_required", and the message names `sqlbranch pool upgrade --yes`

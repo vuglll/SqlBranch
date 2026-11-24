@@ -10,16 +10,18 @@ Prerequisites, checked 2026-11-24 against `docs/roadmap.md` and `openspec/change
 
 - "Needs first" is "0.2 archived" (SqlBranch.Testing 0.2.x is what this change must keep working, then fence off): met 2026-11-18. There is no spike gate; the platform facts this change relies on are settled by its own first task group (see below).
 - The draft is the `add-pool-format-upgrade` section of `docs/feature-drafts.md`, written from the F4 review on 2026-11-24. Its facts were re-checked against the code of release 0.2.2 and NuGet the same day; see [the dated research note](../../../docs/research/2026-11-24-pool-format-upgrade-facts.md).
-- The released `sqlbranch` and `SqlBranch.Testing` packages 0.2.0, 0.2.1 and 0.2.2 are on NuGet (https://api.nuget.org/v3-flatcontainer/sqlbranch/index.json and https://api.nuget.org/v3-flatcontainer/sqlbranch.testing/index.json, checked 2026-11-24), so the old-client tests can install 0.2.2. Only 0.2.2 was examined; 0.2.0 and 0.2.1 are assumed to behave the same and are not tested.
+- The released `sqlbranch` and `SqlBranch.Testing` packages 0.2.0, 0.2.1 and 0.2.2 are on NuGet (https://api.nuget.org/v3-flatcontainer/sqlbranch/index.json and https://api.nuget.org/v3-flatcontainer/sqlbranch.testing/index.json, checked 2026-11-24), so the old-client tests can install them. Only the 0.2.2 source is in the repository and was examined; task 5.1 runs 0.2.0, 0.2.1 and 0.2.2 of both packages from NuGet (maintainer decision 10, 2026-11-24).
+- F4a and F4 ship together in release 0.3 (maintainer decision 1, 2026-11-24); one 0.3 `CHANGELOG.md` entry covers both.
 
 ## What Changes
 
 - Every pool has a format. Pools written by 0.2.2, and pools `sqlbranch init` creates in this release, use format 1. `status` reports `poolFormat`.
-- Add `sqlbranch pool upgrade --yes`, an explicit, one-way move from format 1 to format 2. Without `--yes` it exits 2 and changes nothing. It rewrites the owner-only engine credentials file so that SqlBranch 0.2.x tools stop before they change anything, waits up to `publishWait` for running operations, gives every existing image its first version ID and records the base of every existing branch (pinned, unknown or removed). It prints an irreversibility warning on standard error in text and JSON mode.
-- An upgrade that times out, is killed or fills the pool is left unfinished: commands that change images or branches exit 3 `pool_upgrade_required` until `pool upgrade --yes` is run again, and `status` says so and names the command. A rerun keeps IDs already given and removes a leftover temporary credentials file.
+- Add `sqlbranch pool upgrade --yes`, an explicit, one-way move from format 1 to format 2. Without `--yes` it exits 2 and changes nothing. It first takes a pool-wide upgrade lock (a second concurrent run exits 1 `catalog_busy` saying an upgrade is running), rewrites the owner-only engine credentials file so that SqlBranch 0.2.x tools stop before they change anything, waits up to `publishWait` for running operations on existing image names and existing branches, gives every existing image its first version ID and records the base of every existing branch (pinned, unknown or removed). Builds, imports and creates of new names are not waited for; they land in the format-1 layout and are adopted later. It prints an irreversibility warning on standard error in text and JSON mode.
+- The upgrade changes only the credentials file, image catalogs, per-name ID files and branch records. It never touches image data files or manifests, branch data files, attached databases, logins or the engine container (no stop or restart).
+- An upgrade that times out, is killed or fills the pool after the fence is left unfinished: commands that change images or branches exit 3 `pool_upgrade_required` until `pool upgrade --yes` is run again, and `status` says so and names the command (exit 1; while the upgrade is still running, `status` shows it in progress and exits 0). A pool that fills while the new credentials are written stays at format 1. A rerun keeps IDs already given and removes a leftover temporary credentials file. SqlBranch.Testing 0.3 fails with a message naming `sqlbranch pool upgrade --yes`, and its availability check returns false, during an unfinished upgrade.
 - On a format-2 pool the existing commands use a per-name image catalog: every build source (backup file, backup URL, scripts, BACPAC) and plain import publish the name's first version with an ID `<name>@<UTC time to the ms>`, name existence is checked through the catalog, `image rm` removes the name from it, and IDs of a name keep increasing across removal and reuse (a high-water mark kept per name).
 - `branch create` records the branch's base version; `branch reset` and fixture reset restore it, and refuse with `image_not_found` when it was removed or is unknown. `branch list`, `branch create`, `branch reset`, `image build`, `image import` and `image list` gain version fields (null on format 1).
-- Images and branches that a 0.2.2 command wrote after the upgrade are adopted by the first command that uses them.
+- Images and branches that a 0.2.2 command, or a 0.3 command that started before the upgrade, wrote after the upgrade are adopted by the first command that uses them; adopted images get an ID by the version-ID rule. Read-only commands do not adopt.
 - New setting `publishWait` (default 10 minutes) and two new error codes, `catalog_busy` and `pool_upgrade_required`.
 - The agent skill tells agents not to run `pool upgrade` unless the user asks.
 
@@ -33,9 +35,9 @@ None.
 
 - `engine`: pool format, `pool upgrade`, unfinished upgrades, behavior of 0.2.x clients, error order, status.
 - `images`: catalog-based name existence, version IDs on every build and import, `image rm` on format 2, version fields.
-- `branches`: the recorded base, reset to it, refusal for a removed or unknown base, version fields.
+- `branches`: the recorded base, reset to it, the checks before the drop, refusal for a removed or unknown base, version fields.
 - `configuration`: the `publishWait` setting.
-- `test-fixtures`: fixture reset with a removed or unknown base.
+- `test-fixtures`: fixture reset to the base version, a removed or unknown base, and failure and availability during an unfinished upgrade.
 - `agent-skill`: a guardrail for `pool upgrade`.
 
 ## Impact
@@ -44,7 +46,7 @@ Core pool, image and branch code, CLI metadata, status, on-pool metadata, JSON f
 
 **Breaking for older clients, after an opt-in upgrade.** Once a user runs `sqlbranch pool upgrade --yes`, the `sqlbranch` tool 0.2.x and SqlBranch.Testing 0.2.x can no longer use that pool:
 
-- 0.2.2 `init` on the existing pool, `engine start`, `status`, every `image build`, `image import`, `image rm` and every `branch` command exit 1 with `operation_failed` and the message "The engine credentials file in <pool> is not valid." The released code cannot be changed, so the message does not say to upgrade. The docs and the release notes quote it and give the fix: update the tool and the package.
+- With the engine running, 0.2.2 `init` on the existing pool, `engine start`, `status`, every `image build`, `image import`, `image rm` and every `branch` command exit 1 with `operation_failed` and the message "The engine credentials file in <pool> is not valid." With the engine stopped they report `engine_stopped` (exit 3) as before, without reading the file, except `engine start` and `init`, which read it and exit 1 (0.2.2 source, research note). The released code cannot be changed, so the message does not say to upgrade. The docs and the release notes quote it and give the fix: update the tool and the package.
 - SqlBranch.Testing 0.2.x throws the same message, and its availability check returns false, so **tests that skip on that check silently stop running** after the upgrade. The release notes warn about this.
 - The upgrade cannot be undone. A pool that has not been upgraded keeps working with 0.2.2 and with this release.
 
@@ -52,7 +54,9 @@ Core pool, image and branch code, CLI metadata, status, on-pool metadata, JSON f
 
 **Behavior change on an upgraded pool.** A branch that is older than its image's last rebuild gets an unknown base, and a plain `branch reset` of it exits 1 `image_not_found` instead of resetting to whatever the image now holds. In this change the fix is to remove the branch and create it again; F4 adds `branch reset <name> --latest`.
 
-The credentials-file rename at every kill point and the release of session locks held by killed clients are **not verified yet**; task group 1 settles them first after approval. That 0.2.2 `image list` ignores the new branch-record field is also checked there.
+**JSON stays compatible on format 1.** The new fields (`version`, `imageVersion`, `image.versions`, `poolFormat`) are additive under the existing schemaVersion 1 rules; on a format-1 pool they are null or [] and count as 0.2.2-compatible output (maintainer decision 13).
+
+The credentials-file rename at every kill point and the release of session locks held by killed clients (the upgrade lock included) are **not verified yet**; task group 1 settles them first after approval. That 0.2.2 `image list` ignores the new branch-record field is also checked there. What 0.2.0 and 0.2.1 do is settled by task 5.1.
 
 ## Out of scope
 
@@ -63,4 +67,4 @@ The credentials-file rename at every kill point and the release of session locks
 
 ## Decisions for the maintainer
 
-- In this change alone, the only fix for a branch with an unknown or removed base is `branch rm` plus `branch create`. F4 adds `--latest`. If F4 might ship in a later release than this change, say so, and the release notes will say it too.
+None open. Resolved 2026-11-24: F4a and F4 ship together in 0.3, so `branch reset --latest` is available in the same release as the unknown and removed bases this change creates; the 0.3 `CHANGELOG.md` entry covers both changes.
