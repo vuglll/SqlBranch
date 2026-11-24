@@ -125,6 +125,36 @@ result.
 
 ---
 
+## F4a `add-pool-format-upgrade` (0.3)
+
+**Why.** Image refresh (F4) keeps several versions of an image and pins each
+branch to its version. SqlBranch 0.2.x tools know nothing about versions and
+must not write to such a pool. Split out of F4 on 2026-11-24 so that the
+breaking, opt-in part ships and is reviewed on its own.
+
+**Behavior sketch.**
+- Pools have a format. 0.2.2 pools and pools `init` creates in 0.3 use
+  format 1. `status` reports it.
+- `sqlbranch pool upgrade --yes` moves a pool to format 2, one way. It rewrites
+  the engine credentials file so 0.2.x tools stop, waits up to `publishWait`
+  for running work, gives each image a first version ID and records each
+  branch's base. An interrupted upgrade blocks writes until it is rerun.
+- On format 2 every existing build source and import writes a per-name
+  catalog with version IDs; `branch create` records its base; reset restores
+  it and refuses a removed or unknown base.
+- 0.2.x tools and SqlBranch.Testing 0.2.x fail on an upgraded pool with a
+  fixed message; the release notes quote it.
+
+**Needs first.** 0.2 archived.
+
+**Verify before proposing.**
+- Exactly what each 0.2.2 command and SqlBranch.Testing 0.2.x do on a pool
+  whose credentials file has a new shape.
+- That the credentials-file rename is atomic at every kill point on directory
+  and loop-xfs pools.
+
+---
+
 ## F4 `add-image-refresh` (0.3)
 
 **Why.** Teams want this morning's data, not last month's. The simple version
@@ -148,8 +178,9 @@ data ready at 9 am.
   plus the full nightly recipe: build from a cloud backup, run masking
   scripts, export to shared storage.
 
-**Needs first.** 0.1 archived. The nightly recipe also uses
-`add-cloud-backup-source` and `add-image-export-import`.
+**Needs first.** 0.1 archived; F4a `add-pool-format-upgrade` archived (since
+2026-11-24). The nightly recipe also uses `add-cloud-backup-source` and
+`add-image-export-import`.
 
 **Spec note.** One existing requirement changes for backup and scripts builds: building with the name
 of an existing image fails today. With `--replace` it is allowed. Propose it

@@ -106,7 +106,8 @@ in `docs/feature-drafts.md`.
 | F1 | `add-cloud-backup-source` | 0.3 | 0.1 archived. **Archived 2026-11-19**; its real-cloud checks are on the 0.3 release gate |
 | F2 | `add-bacpac-source` | 0.3 | 0.2 archived. **Archived 2026-11-20**; Windows (SqlPackage and file permissions) is recorded as not verified; the 10/50 GB timings are on the 0.3 release gate |
 | F3 | `add-image-export-import` | 0.3 | 0.1 archived; F1 for cloud URLs. **Archived 2026-11-19**; its x86-64 and real-cloud checks are on the 0.3 release gate |
-| F4 | `add-image-refresh` | 0.3 | 0.1 archived |
+| F4a | `add-pool-format-upgrade` | 0.3 | 0.2 archived. Split out of F4 on 2026-11-24: pool format 2, `sqlbranch pool upgrade --yes`, the image catalog, version IDs and branch bases. Draft in `docs/feature-drafts.md` |
+| F4 | `add-image-refresh` | 0.3 | 0.1 archived; F4a (`add-pool-format-upgrade`) archived |
 | F5 | `add-github-action` | 0.3 | 0.2 archived (gate G4 passed) |
 | F6 | `add-branch-snapshots` | 0.3 | 0.1 archived |
 | F7 | `add-mcp-server` | 0.3 | 0.2 archived (agent skill) |

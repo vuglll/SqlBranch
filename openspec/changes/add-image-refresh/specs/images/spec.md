@@ -1,12 +1,20 @@
 ## MODIFIED Requirements
 
 ### Requirement: Image names are unique
-A build with the name of an existing image MUST fail without changing the pool. The only exception is a backup or scripts build with `--replace` on a pool that uses format 2.
+A build or import with the name of an existing image MUST fail without changing the pool. On a pool that uses format 2, a name exists when the image catalog lists a current version of it, or when an image of that name written by an older client is present. The only exception is a backup or scripts build, or an import, with `--replace` on a pool that uses format 2.
 
 #### Scenario: Name already used
 - **WHEN** image `shop` exists and the user runs `sqlbranch image build shop --from-bak other.bak`
 - **THEN** the command exits with code 1 and says the image already exists
 - **AND** the existing image is unchanged
+
+#### Scenario: Name already used on a format-2 pool
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has version `shop@20261201T090000000Z`, and the user runs `sqlbranch image build shop --from-scripts db`
+- **THEN** the command exits with code 1, `error.code` is "image_exists", and `sqlbranch image list --format json` shows shop with `version` "shop@20261201T090000000Z"
+
+#### Scenario: Name used by an image an older client wrote
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, and image `crm` was written in the 0.2.2 layout after the upgrade (tested by writing its files directly)
+- **THEN** `sqlbranch image build crm --from-bak crm.bak` exits with code 1, `error.code` is "image_exists", and crm's files are unchanged
 
 #### Scenario: Publish a replacement
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has one version `shop@20261201T020000000Z`, and `sqlbranch image build shop --from-bak next.bak --replace` runs at 2026-12-02T02:00:00.000Z (tested with a fake clock)
@@ -34,7 +42,7 @@ When a build fails at any step, from a backup or from scripts, SqlBranch SHALL r
 - **AND** `sqlbranch image list --versions` lists only `shop@20261201T020000000Z`, `dev1` can commit a row, and `sqlbranch status` exits with code 0
 
 ### Requirement: Remove an image
-`sqlbranch image rm <name>` SHALL remove the image's files and manifest, and MUST NOT delete or change any branch file. On a pool that uses format 2 it SHALL remove every retained version of the name, and its JSON `image.versions` SHALL list the removed version IDs.
+`sqlbranch image rm <name>` SHALL remove the image's files and manifest, and MUST NOT delete or change any branch file. On a pool that uses format 2 it SHALL remove every retained version of the name from the image catalog, and its JSON `image.versions` SHALL list the removed version IDs, newest first. On a pool that uses format 1, `image.versions` SHALL be [].
 
 #### Scenario: Unused image
 - **WHEN** the clone mode is `thin` or `copy`, image `crm` has no branches, and the user runs `sqlbranch image rm crm`
@@ -43,6 +51,14 @@ When a build fails at any step, from a backup or from scripts, SqlBranch SHALL r
 #### Scenario: Unknown image for rm
 - **WHEN** the user runs `sqlbranch image rm nope`
 - **THEN** the command exits with code 1 and `error.code` is "image_not_found"
+
+#### Scenario: Remove on a format-2 pool
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, crm has version `crm@20261201T090000000Z` and no branches, and the user runs `sqlbranch image rm crm --format json`
+- **THEN** the command exits with code 0, `image.versions` is ["crm@20261201T090000000Z"], and `sqlbranch image list` no longer shows crm
+
+#### Scenario: Remove on a format-1 pool
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1, crm has no branches, and the user runs `sqlbranch image rm crm --format json`
+- **THEN** the command exits with code 0 and `image.versions` is []
 
 #### Scenario: Unused image with two versions
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has versions `shop@20261201T020000000Z` and `shop@20261202T020000000Z` and no branches, and the user runs `sqlbranch image rm shop --format json`
@@ -133,6 +149,14 @@ Before publishing, a replacement build or import SHALL wait for creates and rese
 - **WHEN** the clone mode is `copy`, `publishWait` is `10m`, and a reset of `dev1` from shop is still running for 2 minutes after a replacement of shop is ready to publish (tested with a fake clock)
 - **THEN** standard error says the build is waiting for operations on image shop, and the build exits 0 after the reset finishes
 
+### Requirement: A waiting publication does not block new branch operations
+While a replacement build or import waits to publish, a `branch create` or `branch reset` of the same name that starts SHALL NOT wait for the publication: it SHALL use the version that is current when it starts and run to completion.
+
+#### Scenario: Create arrives while a publisher waits
+- **WHEN** the clone mode is `thin` or `copy`, shop's current version is `shop@20261201T020000000Z`, a reset of `dev1` holds shop, and a replacement of shop is waiting to publish
+- **THEN** `sqlbranch branch create dev9 --from shop --format json` started during the wait exits 0 without waiting for the publication, with `branch.imageVersion` "shop@20261201T020000000Z"
+- **AND** the replacement publishes after the reset and the create both finish
+
 ### Requirement: Publication wait timeout
 When the `publishWait` time runs out before running creates and resets of the name finish, a replacement build or import MUST exit 1 with `error.code` "catalog_busy", publish nothing, remove its unpublished version and leave the previous version current.
 
@@ -159,17 +183,6 @@ When a replacement fails or is cancelled after sealing and before publication, i
 #### Scenario: Crash before switch
 - **WHEN** the clone mode is `thin` or `copy` and the client is killed after sealing a second version of shop and before publication
 - **THEN** a new branch of shop reads the first version's rows, and `sqlbranch status` exits with code 1 and lists the unpublished version's folder as a build leftover
-
-### Requirement: Image version IDs
-On a pool that uses format 2, every published version SHALL have an ID of the form `<name>@<yyyyMMdd>T<HHmmssfff>Z`, the UTC publication time to the millisecond. IDs of one name MUST be unique and increase with publication order, also when the clock goes back or the name is removed and used again.
-
-#### Scenario: Two publications in one millisecond
-- **WHEN** the clone mode is `thin` or `copy` and two replacements of shop publish one after the other while the fake clock reads 2026-12-01T02:00:00.000Z for both
-- **THEN** the versions are `shop@20261201T020000000Z` and `shop@20261201T020000001Z`
-
-#### Scenario: Clock moved back
-- **WHEN** the clone mode is `thin` or `copy`, the last version of shop is `shop@20261201T020000000Z`, and the next replacement publishes while the fake clock reads 2026-11-30T02:00:00.000Z
-- **THEN** the new version is `shop@20261201T020000001Z`
 
 ### Requirement: List image versions
 `sqlbranch image list --versions` SHALL list every retained version, grouped by image name in name order and newest first within a name, with its ID, whether it is current, its size in bytes (the sum of its sealed file lengths) and the number of branches whose base it is, broken and expired branches included.
@@ -216,12 +229,20 @@ When a build, import or removal of an image name is running, `image prune` SHALL
 - **WHEN** the clone mode is `thin` or `copy`, a replacement build of shop is restoring, crm has versions `crm@20261201T020000000Z` and `crm@20261202T020000000Z` with no branches, and the user runs `sqlbranch image prune --keep 1 --format json`
 - **THEN** the command exits with code 0, `removed` is ["crm@20261201T020000000Z"] and `skipped` is [{"image":"shop","version":null,"reason":"image_busy"}]
 
+### Requirement: Prune skips names with running branch operations
+When a `branch create` or `branch reset` of an image name is running, `image prune` SHALL remove no version of that name, list each version it would have removed in `skipped` with reason "catalog_busy", continue with other names without waiting, and exit 0 if nothing else failed.
+
+#### Scenario: Reset running during prune
+- **WHEN** the clone mode is `thin` or `copy`, shop has unused older version `shop@20261201T020000000Z` and current `shop@20261202T020000000Z`, a reset of `dev1` to `shop@20261202T020000000Z` is running, and the user runs `sqlbranch image prune --keep 1 --format json`
+- **THEN** the command exits with code 0 without waiting, `removed` is [] and `skipped` is [{"image":"shop","version":"shop@20261201T020000000Z","reason":"catalog_busy"}]
+- **AND** after the reset ends, the same command exits 0 with `removed` ["shop@20261201T020000000Z"]
+
 ### Requirement: Prune fails closed on unreadable branch records
-If any branch record cannot be read when prune checks references, prune MUST remove no version of any image, exit 1 with `error.code` "operation_failed", name the record's path, and report `removed` [].
+On a pool that uses format 2, if any branch record cannot be read when prune checks references, prune MUST remove no version of any image, exit 1 with `error.code` "operation_failed", name the unreadable record, and report `removed` [].
 
 #### Scenario: Unknown reference
-- **WHEN** the clone mode is `thin` or `copy`, `/pool/branches/x1/branch.json` is not valid JSON, and shop and crm each have an unused older version, and the user runs `sqlbranch image prune --keep 1 --format json`
-- **THEN** the command exits with code 1, `error.code` is "operation_failed", the message names `/pool/branches/x1/branch.json`, and `removed` is []
+- **WHEN** the clone mode is `thin` or `copy`, the record of branch `x1` is not valid JSON, and shop and crm each have an unused older version, and the user runs `sqlbranch image prune --keep 1 --format json`
+- **THEN** the command exits with code 1, `error.code` is "operation_failed", the message names the record of `x1`, and `removed` is []
 - **AND** both older versions are still listed by `sqlbranch image list --versions`
 
 ### Requirement: Prune needs a running engine
@@ -250,6 +271,13 @@ When deleting an unlisted version's files fails, prune MUST exit 1, still list i
 - **THEN** the command exits with code 1, `removed` is ["shop@20261201T020000000Z"], and `sqlbranch status` exits with code 1 and names the leftover path
 - **AND** after the fault is fixed, the same command exits 0 with `removed` ["shop@20261201T020000000Z"], `sqlbranch status` exits 0, and `dev1` is unchanged
 
+### Requirement: Prune deletes only the versions it unlisted
+`image prune` MUST delete only the files of versions it unlisted in that run or that an earlier prune unlisted and recorded. It MUST NOT delete or change any branch file, any file of another image name or of a kept version, or any build, import or reset workspace.
+
+#### Scenario: Branch files survive a prune
+- **WHEN** the clone mode is `thin`, then `copy`, shop has versions `shop@20261201T020000000Z`, `shop@20261202T020000000Z` and `shop@20261203T020000000Z`, `dev1` uses the newest with committed writes, crm has one version, a reset workspace of `dev2` and a build of `sales` are in progress, and the user runs `sqlbranch image prune --keep 1`
+- **THEN** the command exits with code 0, and the SHA-256 of every file of `dev1`, of crm, of `shop@20261203T020000000Z`, and of the workspaces of `dev2` and `sales` is unchanged
+
 ### Requirement: Removal checks branches across all versions
 On a pool that uses format 2, `image rm <name>` without `--force` MUST exit 1 with `error.code` "image_in_use" when any branch uses any version of the name, list those branches, name `--force`, and leave every version listed.
 
@@ -257,43 +285,54 @@ On a pool that uses format 2, `image rm <name>` without `--force` MUST exit 1 wi
 - **WHEN** the clone mode is `thin` or `copy`, shop has two versions and only `dev1`, created from the older one, uses shop, and the user runs `sqlbranch image rm shop`
 - **THEN** the command exits with code 1, `error.code` is "image_in_use", the message names `dev1` and `--force`, and both versions remain listed
 
+### Requirement: Removal waits for running branch operations
+On a pool that uses format 2, when a `branch create` or `branch reset` of the name is running, `image rm <name>` SHALL wait for it for at most `publishWait`. When the wait runs out it MUST exit 1 with `error.code` "catalog_busy", name the image, and leave every version listed and intact.
+
+#### Scenario: Reset holds the image during removal
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `publishWait` is `10m`, and a reset of `dev1` from shop keeps running for 11 minutes after `sqlbranch image rm shop --force` starts (tested with a fake clock)
+- **THEN** the removal exits with code 1 at the 10-minute mark, `error.code` is "catalog_busy", and `sqlbranch image list --versions` still lists every version of shop
+
+#### Scenario: Create finishes within the wait
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `publishWait` is `10m`, crm has no branches, and a create of `tmp1` from crm finishes 1 minute after `sqlbranch image rm crm --force` starts (tested with a fake clock)
+- **THEN** the removal exits with code 0, names `tmp1` as a branch that lost its reset base, and `tmp1` keeps its data
+
 ### Requirement: Forced removal names lost reset bases
-`image rm <name> --force` SHALL unlist every version of the name in one step before deleting files, and SHALL name each branch that loses its reset base together with that version ID. Those branches MUST keep their data and open connections.
+On a pool that uses format 2, `image rm <name> --force` SHALL unlist every version of the name in one step before deleting files, and SHALL name each branch that loses its reset base together with that version ID. Those branches MUST keep their data and open connections.
 
 #### Scenario: Forced removal of history
-- **WHEN** the clone mode is `thin` or `copy`, shop has two versions and `dev1` was created from `shop@20261201T020000000Z`, and the user runs `sqlbranch image rm shop --force`
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has two versions and `dev1` was created from `shop@20261201T020000000Z`, and the user runs `sqlbranch image rm shop --force`
 - **THEN** the command exits with code 0 and names `dev1` and `shop@20261201T020000000Z`
 - **AND** no version of shop is listed, `dev1` keeps its edits, and its open connection can commit a row
 
 ### Requirement: Removal unlisting failure changes nothing
-When unlisting the name fails, `image rm` MUST exit 1 and leave every version listed and intact.
+On a pool that uses format 2, when unlisting the name fails, `image rm` MUST exit 1 and leave every version listed and intact.
 
 #### Scenario: Unlisting fails during removal
-- **WHEN** the clone mode is `thin` or `copy`, shop has two versions and the rename that unlists shop fails during `sqlbranch image rm shop` (tested with a fake runtime)
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has two versions and the rename that unlists shop fails during `sqlbranch image rm shop` (tested with a fake runtime)
 - **THEN** the command exits with code 1, both versions remain listed, and no removal record remains in the pool
 
 ### Requirement: Retry only the interrupted removal
-When an earlier `image rm` unlisted a name but could not delete its files, running `image rm <name>` again SHALL delete only those recorded leftovers and list the cleaned version IDs. If no image of that name exists afterwards it SHALL exit 0. It MUST NOT remove a newer image that took the same name.
+On a pool that uses format 2, when an earlier `image rm` unlisted a name but could not delete its files, running `image rm <name>` again SHALL delete only those recorded leftovers and list the cleaned version IDs. If no image of that name exists afterwards it SHALL exit 0. It MUST NOT remove a newer image that took the same name.
 
 #### Scenario: Retry after a deletion failure
-- **WHEN** the clone mode is `thin` or `copy`, `sqlbranch image rm shop` unlisted `shop@20261201T020000000Z` and `shop@20261202T020000000Z` but deleting their files failed, and the fault is fixed
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, `sqlbranch image rm shop` unlisted `shop@20261201T020000000Z` and `shop@20261202T020000000Z` but deleting their files failed, and the fault is fixed
 - **THEN** `sqlbranch image rm shop --format json` exits with code 0 and `image.versions` is ["shop@20261202T020000000Z", "shop@20261201T020000000Z"]
 - **AND** `sqlbranch status` exits with code 0
 
 ### Requirement: Retry stops at a newer image of the same name
-When a newer image took the name before the retry, `image rm <name>` SHALL clean the recorded leftovers, then exit 1 with `error.code` "image_exists", name the newer current version, and say that a new `image rm <name>` removes it and needs `--force` if it has branches.
+On a pool that uses format 2, when a newer image took the name before the retry, `image rm <name>` SHALL clean the recorded leftovers, then exit 1 with `error.code` "image_exists", name the newer current version, and say that a new `image rm <name>` removes it and needs `--force` if it has branches.
 
 #### Scenario: Name reused before cleanup
-- **WHEN** the clone mode is `copy`, a forced removal unlisted shop but left its files, then `sqlbranch image build shop --from-bak shop.bak` published `shop@20261203T020000000Z` with branch `dev2`, and the user runs `sqlbranch image rm shop`
+- **WHEN** the clone mode is `copy`, the pool uses format 2, a forced removal unlisted shop but left its files, then `sqlbranch image build shop --from-bak shop.bak` published `shop@20261203T020000000Z` with branch `dev2`, and the user runs `sqlbranch image rm shop`
 - **THEN** the command removes only the leftover files and exits with code 1 and `error.code` "image_exists"
 - **AND** the message names `shop@20261203T020000000Z`, `image rm shop` and `--force`, and `dev2` and the new version are unchanged
 
 ### Requirement: Removal fails closed on unreadable branch records
-When any branch record cannot be read, `image rm` MUST exit 1 with `error.code` "operation_failed" and name the record's path before unlisting any version, with or without `--force`.
+On a pool that uses format 2, when any branch record cannot be read, `image rm` MUST exit 1 with `error.code` "operation_failed" and name the unreadable record before unlisting any version, with or without `--force`.
 
 #### Scenario: Unknown dependents during forced removal
-- **WHEN** the clone mode is `thin` or `copy`, `/pool/branches/x1/branch.json` is not valid JSON, and the user runs `sqlbranch image rm shop --force`
-- **THEN** the command exits with code 1, names `/pool/branches/x1/branch.json`, both shop versions remain listed, and no file is deleted
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has two versions, the record of branch `x1` is not valid JSON, and the user runs `sqlbranch image rm shop --force`
+- **THEN** the command exits with code 1, `error.code` is "operation_failed", the message names the record of `x1`, both shop versions remain listed, and no file is deleted
 
 ### Requirement: Prune count is checked before any action
 `image prune` MUST take `--keep` exactly once, with a value of ASCII digits `0`-`9` only, leading zeros allowed, between 1 and 2147483647. Any other value, a missing or repeated `--keep`, an image operand or an unknown option MUST exit 2 with `error.code` "usage_error", name the input and run no Docker command.
@@ -332,13 +371,6 @@ A build with `--replace` MUST apply every input check of the same build without 
 - **WHEN** the user runs `sqlbranch image build shop --replace --from-scripts db --from-bak shop.bak`
 - **THEN** the command exits with code 2, `error.code` is "usage_error", and no Docker command runs
 
-### Requirement: Version IDs are not image names
-A version ID MUST NOT be accepted where an image name is expected. Such input MUST exit 2 with `error.code` "invalid_name" before any Docker command.
-
-#### Scenario: Version used as image name
-- **WHEN** the user runs `sqlbranch image rm shop@20261119T020000000Z`
-- **THEN** the command exits with code 2, `error.code` is "invalid_name", and no Docker command runs
-
 ### Requirement: BACPAC builds cannot replace
 `image build --from-bacpac` with `--replace` MUST exit 2 with `error.code` "usage_error" before any Docker command, download or SqlPackage run, and the message SHALL say that BACPAC builds cannot replace an image.
 
@@ -357,12 +389,12 @@ Replacement builds and imports, prune and the documented scheduler examples MUST
 - **WHEN** the clone mode is `thin` or `copy`, `SQLBRANCH_S3_SECRET_ACCESS_KEY` is `sentinel-s3`, and a replacement from an `s3://` URL fails during restore
 - **THEN** the command exits with code 1 and no output stream, log, error, manifest or recorded child argument contains `sentinel-s3`
 
-### Requirement: Build JSON reports the version
-With `--format json`, a successful `image build` or `image import` on a pool that uses format 2 SHALL add `image.version` (string) to its existing fields, which keep their types and meanings. On a pool that uses format 1, `image.version` SHALL be null.
+### Requirement: Export reads the version current when it starts
+On a pool that uses format 2, `image export <name>` SHALL write the version that is current when the export starts, even if a newer version is published or prune runs while it reads, and the archive MUST hold only that version's files.
 
-#### Scenario: Version in build JSON
-- **WHEN** the clone mode is `copy` and `sqlbranch image build shop --from-scripts db --replace --format json` publishes at 2026-12-01T02:00:00.000Z (tested with a fake clock)
-- **THEN** the command exits with code 0, `schemaVersion` is 1, `image.version` is "shop@20261201T020000000Z" and `image.cloneMode` is "copy"
+#### Scenario: Publication during an export
+- **WHEN** the clone mode is `thin` or `copy`, shop's current version is `shop@20261201T020000000Z`, `sqlbranch image export shop --to shop.sbimg` is paused after it started reading (tested with a barrier), and a replacement of shop then publishes `shop@20261202T020000000Z`
+- **THEN** the export exits with code 0 and `sqlbranch image import shop.sbimg --as old1` then exits 0 with the rows of `shop@20261201T020000000Z`
 
 ### Requirement: Version list JSON
 With `--format json`, `image list --versions` SHALL return `versions`, an array of objects with `name`, `version`, `current` (boolean), `sizeBytes` (integer) and `branches` (integer), in the listed order, with `schemaVersion` 1.
@@ -372,7 +404,7 @@ With `--format json`, `image list --versions` SHALL return `versions`, an array 
 - **THEN** the command exits 0 with `schemaVersion` 1 and `versions` equal to `[{"name":"shop","version":"shop@20261119T020000000Z","current":true,"sizeBytes":8192,"branches":0}]`
 
 ### Requirement: Prune JSON
-With `--format json`, `image prune` SHALL return `removed` (version IDs in the order they were unlisted) and `skipped` (objects with `image`, `version` and `reason`), both always present. On exit 1 the document SHALL hold `error` together with `removed` and `skipped` so a script sees partial progress.
+With `--format json`, `image prune` SHALL return `removed` (version IDs in the order they were unlisted) and `skipped` (objects with `image`, `version` and `reason`: "export_in_progress", "image_busy" or "catalog_busy"), both always present. On exit 1 the document SHALL hold `error` together with `removed` and `skipped` so a script sees partial progress.
 
 #### Scenario: Nothing to prune
 - **WHEN** the clone mode is `thin` or `copy`, every image has one version, and the user runs `sqlbranch image prune --keep 1 --format json`
