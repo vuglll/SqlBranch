@@ -184,7 +184,7 @@ public sealed class BranchResetter
         if (record.BaseKnown == false)
         {
             throw new SqlBranchException(ErrorCodes.ImageNotFound,
-                Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so the branch cannot be reset to it."));
+                Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so that version no longer exists for this branch and the branch cannot be reset."));
         }
 
         if (record.ImageVersion is null)

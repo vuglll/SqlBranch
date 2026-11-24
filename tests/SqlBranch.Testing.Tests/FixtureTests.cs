@@ -204,6 +204,7 @@ public sealed class FixtureTests : IDisposable
         Assert.Contains(db.Name, error.Message, StringComparison.Ordinal);
         Assert.Contains("'shop'", error.Message, StringComparison.Ordinal);
         Assert.Contains("sqlbranch branch create", error.Message, StringComparison.Ordinal);
+        Assert.Contains("no longer exists", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("sqlbranch image build", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
         Assert.False(changed);

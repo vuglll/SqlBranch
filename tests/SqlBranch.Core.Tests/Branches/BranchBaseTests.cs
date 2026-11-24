@@ -74,6 +74,7 @@ public sealed class BranchBaseTests
         Assert.Contains("dev1", message, StringComparison.Ordinal);
         Assert.Contains("sqlbranch branch rm dev1", message, StringComparison.Ordinal);
         Assert.Contains("sqlbranch branch create", message, StringComparison.Ordinal);
+        Assert.Contains("no longer exists", message, StringComparison.Ordinal);
         Assert.False(Changed(), string.Join('\n', _w.Timeline));
         Assert.Equal(before, _w.Records["dev1"]);
     }
