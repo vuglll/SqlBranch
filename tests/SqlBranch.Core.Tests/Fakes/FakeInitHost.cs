@@ -85,6 +85,12 @@ internal sealed class FakeInitHost
 
     public bool EngineDirExists { get; set; }
 
+    /// <summary>Every JSON a format-2 credentials write was given, in order, whether or not it succeeded.</summary>
+    public List<string> CredentialsRewrites { get; } = [];
+
+    /// <summary>The error text the format-2 credentials write fails with (for example "No space left on device"); null lets it succeed.</summary>
+    public string? CredentialsRewriteFailure { get; set; }
+
     /// <summary>The JSON of the credentials file, or null.</summary>
     public string? CredentialsJson { get; set; }
 
@@ -183,6 +189,19 @@ internal sealed class FakeInitHost
         if (script.Contains("SQLBRANCH_CREDENTIALS=", StringComparison.Ordinal))
         {
             return CredentialsReply();
+        }
+
+        if (spec.Stdin is { } rewritten && script.Contains("credentials.json.new", StringComparison.Ordinal) && script.Contains("mv -f", StringComparison.Ordinal))
+        {
+            // The format-2 write (design D2): the old file stays when a step before the rename fails.
+            CredentialsRewrites.Add(rewritten);
+            if (CredentialsRewriteFailure is { } failure)
+            {
+                return FakeContainerRuntime.Fail(1, failure);
+            }
+
+            CredentialsJson = rewritten;
+            return FakeContainerRuntime.Ok();
         }
 
         if (spec.Stdin is { } json && script.Contains("cat > /pool/engine/credentials.json", StringComparison.Ordinal))

@@ -180,6 +180,28 @@ the engine container, the pool file or the volume still mark SqlBranch as
 initialized. JSON: `removed` (`databases`, `databaseFiles`, `importBackups`,
 `engineContainer`, `poolFolders`, `poolFile`, `volume`) and `left`.
 
+### `sqlbranch pool upgrade --yes`
+
+```
+sqlbranch pool upgrade --yes
+```
+
+Moves a format-1 pool (what `init` creates and SqlBranch 0.2.2 reads) to format 2, which gives every image a first
+version ID and is the base of image refresh. It is the only command that changes the pool format, and it cannot be
+undone: SqlBranch 0.2.x tools and SqlBranch.Testing 0.2.x packages can no longer use the pool afterwards. Stop them, and
+any test run that uses the pool, first. `--yes` is required, takes no value and may be given once; without it, or with an
+operand or another option, the command exits 2 `usage_error` before it runs any Docker command. The global options
+`--format`, `--config` and `--quiet` work as on every command. It needs a running engine (exit 3 `not_initialized` or
+`engine_stopped`).
+
+What it does, in order: takes a pool-wide upgrade lock (a second upgrade exits 1 `catalog_busy`), writes the new credentials
+file with the upgrade marked `running`, locks every existing image and branch, writes each image's `catalog.json` and
+version-ID record with the first ID `<name>@<start time>` (UTC, to the millisecond), and marks the upgrade `done`. It writes
+only the credentials file, the catalogs, the per-name ID records under `images/.ids/` and, in a later step, branch records;
+it never changes image or branch data files, manifests, databases, logins or the engine container. A rerun after a kill or
+a full pool continues from what is recorded and gives the same IDs. On a pool that is already format 2 it changes nothing
+and exits 0.
+
 ## How later commands find the pool
 
 In order: the engine container's labels, `/var/lib/sqlbranch/pool.xfs`, the

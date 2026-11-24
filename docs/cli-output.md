@@ -262,6 +262,48 @@ In text, an `Image version:` line follows the first line of `branch create` and 
 `branch list` shows the version ID instead of the name, followed by `(removed)` when it was removed. A format-1 pool prints
 the 0.2.2 text.
 
+## Pool upgrade
+
+`sqlbranch pool upgrade --yes` moves a format-1 pool to format 2. `pool` is the new format and `previousFormat` the one
+before (2 when the pool was already upgraded, then nothing else changes and `images` is `[]`); `images` lists each image the
+upgrade processed with its first version ID, by name; `branches` names the branches by the base they got and is the three
+empty lists until the upgrade binds branches (a later task of this change).
+
+```json
+{ "schemaVersion": 1, "command": "pool upgrade", "ok": true,
+  "pool": { "format": 2, "previousFormat": 1 },
+  "images": [ { "name": "crm", "version": "crm@20261201T090000000Z" },
+              { "name": "shop", "version": "shop@20261201T090000000Z" } ],
+  "branches": { "pinned": [], "unknownBase": [], "removedBase": [] } }
+```
+
+```json
+{ "schemaVersion": 1, "command": "pool upgrade", "ok": true,
+  "pool": { "format": 2, "previousFormat": 2 }, "images": [],
+  "branches": { "pinned": [], "unknownBase": [], "removedBase": [] } }
+```
+
+The first document is a format-1 pool being upgraded at 2026-12-01T09:00:00.000Z and the second a rerun on a pool that is
+already format 2. The text output of the first run:
+
+```
+The pool now uses format 2 (it used format 1).
+Image crm: version crm@20261201T090000000Z
+Image shop: version shop@20261201T090000000Z
+```
+
+and of the rerun: `The pool already uses format 2. Nothing was changed.` In text and in JSON format, an upgrade that is going to
+write prints one line on standard error before its first write:
+
+```
+warning: The pool upgrade cannot be undone. SqlBranch 0.2.x tools and SqlBranch.Testing 0.2.x packages can no longer use the pool after it.
+```
+
+The command exits 2 `usage_error` before any Docker command when `--yes` is missing, repeated or given a value, or when an
+operand or another option is given; 3 `not_initialized` or `engine_stopped` when there is no running engine; 1
+`catalog_busy` when another upgrade is running or an image or branch is still in use; 1 `pool_full` when the pool has no
+room (before the first write the pool stays format 1, afterwards `sqlbranch pool upgrade --yes` finishes it).
+
 ## Doctor output
 
 `sqlbranch doctor --format json` returns a `checks` array. Each entry contains

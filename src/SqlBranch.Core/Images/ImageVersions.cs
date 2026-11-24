@@ -41,9 +41,23 @@ internal static class ImageVersions
     /// <summary>The next ID: the clock cut to the millisecond, or one millisecond after the last ID when that is not later.</summary>
     public static string Next(string name, DateTimeOffset now, DateTimeOffset? last)
     {
-        var utc = now.UtcDateTime;
-        var cut = new DateTimeOffset(utc.AddTicks(-(utc.Ticks % TimeSpan.TicksPerMillisecond)), TimeSpan.Zero);
+        var cut = ToMillisecond(now);
         return Format(name, last is { } l && cut <= l ? l.AddMilliseconds(1) : cut);
+    }
+
+    /// <summary>The time in UTC, cut to the millisecond the IDs carry.</summary>
+    public static DateTimeOffset ToMillisecond(DateTimeOffset time)
+    {
+        var utc = time.UtcDateTime;
+        return new DateTimeOffset(utc.AddTicks(-(utc.Ticks % TimeSpan.TicksPerMillisecond)), TimeSpan.Zero);
+    }
+
+    /// <summary>Writes the high-water mark of <paramref name="name"/> by temp file and rename (design D4, D11). Run it after <c>set -e</c>.</summary>
+    public static string HighWaterScript(string name, string id)
+    {
+        var file = Quoting.Shell(IdFile(name));
+        var temporary = Quoting.Shell(IdTemporaryFile(name));
+        return $"mkdir -p {Quoting.Shell(IdsDirectory)}; printf %s {Quoting.Shell(id)} > {temporary}; sync {temporary}; mv -f {temporary} {file}";
     }
 
     /// <summary>
@@ -66,9 +80,8 @@ internal static class ImageVersions
         }
 
         var id = Next(name, clock.GetUtcNow(), last);
-        var temporary = Quoting.Shell(IdTemporaryFile(name));
         await EngineShell.RunAsync(runtime, engineName,
-            $"set -e; mkdir -p {Quoting.Shell(IdsDirectory)}; printf %s {Quoting.Shell(id)} > {temporary}; sync {temporary}; mv -f {temporary} {file}",
+            "set -e; " + HighWaterScript(name, id),
             "recording the version", cancellationToken).ConfigureAwait(false);
         return id;
     }

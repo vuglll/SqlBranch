@@ -51,6 +51,7 @@ internal static class SkillGenerator
             - Never run destructive SQL against a server other than the SqlBranch engine.
             - Reset or remove your branches when done.
             - Never weaken a test to hide a database problem.
+            - Never run `sqlbranch pool upgrade` unless the user asked for it: it cannot be undone and stops SqlBranch 0.2.x tools.
 
             **Command reference**
             """.ReplaceLineEndings("\n")).Append("\n\n");

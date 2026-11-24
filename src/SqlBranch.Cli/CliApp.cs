@@ -49,6 +49,7 @@ internal sealed class CliApp
         TeardownCommand.Register(app, GetServices, redactor);
         ImageCommands.Register(app, GetServices, redactor);
         BranchCommands.Register(app, GetServices, redactor);
+        PoolCommands.Register(app, GetServices, redactor);
         SkillCommand.Register(app, services?.WorkingDirectory ?? Environment.CurrentDirectory);
         return app;
     }
