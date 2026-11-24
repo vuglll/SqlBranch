@@ -176,6 +176,7 @@ public sealed class BacpacDownloadTests
         Assert.Equal(1, run.Exit);
         Assert.Equal("image_exists", Code(run.Out));
         Assert.Empty(fixture.Source.Calls);
+        Assert.Equal(["lookup", "verify engine", "name lock", "image exists"], fixture.Trace);
         fixture.NoPublication();
     }
 
