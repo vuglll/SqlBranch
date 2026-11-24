@@ -7,7 +7,7 @@ Every Docker test in every group is an integration test tagged so it runs only w
 This group runs first after approval, on the maintainer's Linux machine, where Docker is available. Record environment, date, observed results and source links in `docs/research/2026-11-24-pool-format-upgrade-facts.md`. A failed check means revising design.md before relying on the fact.
 
 - [ ] 1.1 On a directory pool and a loop-xfs pool, one of them in copy mode, run the D2 rewrite sequence by hand and kill the writer, then restart the engine, at each step (temp write, chown, chmod, sync, rename, directory sync). Also kill a client holding a session application lock in `master` (an image lock and `sqlbranch:pool-upgrade`) and check the lock is released. Verify: after each kill the credentials file parses as the complete old or the complete new content with mode 600 and owner 10001, a rerun of the sequence succeeds, and the lock is free within the observed time. The kill matrix is in the research note.
-- [ ] 1.2 Install the released `sqlbranch` 0.2.2 tool from NuGet. On a format-1 pool, add the D5 fields to one `branch.json` by hand and run 0.2.2 `image list`, `branch list` and `image export`. Verify: the observed exit codes and output are recorded; if 0.2.2 fails on the new fields, revise D5 before task 3.6.
+- [x] 1.2 Install the released `sqlbranch` 0.2.2 tool from NuGet. On a format-1 pool, add the D5 fields to one `branch.json` by hand and run 0.2.2 `image list`, `branch list` and `image export`. Verify: the observed exit codes and output are recorded; if 0.2.2 fails on the new fields, revise D5 before task 3.6.
 
 ## 2. Settings and error codes
 

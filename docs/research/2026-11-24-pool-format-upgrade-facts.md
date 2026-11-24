@@ -26,13 +26,107 @@ on 2026-11-24:
 So the old-client tests (task 5.1) can install the released 0.2.2 tool and
 package from NuGet.
 
-## Platform questions (not verified yet)
+## Platform checks (task group 1, run 2026-11-24)
+
+Environment: Linux 6.18.44 container (ext4 root, 1 vCPU class VM), .NET SDK
+10.0.115, Docker daemon started by hand, engine image
+`mcr.microsoft.com/mssql/server:2022-latest` (SQL Server 16.0.4325.4
+Developer), SqlBranch built from commit 435ae55 (0.2.2 code path), released
+tool `sqlbranch` 0.2.2 from NuGet. Passwords never printed; outputs below were
+filtered.
 
 | Platform question | Status | Settled by |
 |---|---|---|
-| Is the credentials-file rewrite (temp write, chown, chmod, sync, rename, directory sync) complete-old-or-complete-new at every kill point and across an engine restart, on directory and loop-xfs pools? | not verified | Task 1.1, kill matrix |
-| Is a session application lock in `master` released promptly when the client holding it is killed? | not verified | Task 1.1 |
-| Does 0.2.2 `image list`, `branch list` and `image export` ignore unknown fields in `branch.json`? | not verified | Task 1.2, with the released 0.2.2 tool |
+| Is the credentials-file rewrite complete-old-or-complete-new at every kill point and across an engine restart? | verified on a directory pool in copy mode; loop-xfs not testable here (see below) | Task 1.1 |
+| Is a session application lock in `master` released promptly when the client is killed? | verified for a killed client process: free in about 0.1 s | Task 1.1 |
+| Does 0.2.2 `image list`, `branch list` and `image export` ignore unknown fields in `branch.json`? | verified | Task 1.2 |
+
+### Pools used
+
+- Directory pool (`poolBackend plain`, `pool` /tmp/sbpool on ext4): clone mode
+  copy (the clone probe finds no block sharing). This is the copy-mode pool.
+- loop-xfs pool: NOT possible in this container. `sqlbranch init` with
+  `poolBackend loop-xfs` exits with: "the mount step failed: nsenter: cannot
+  open /proc/1/ns/mnt: Permission denied" (no fallback by design). A manual
+  attempt confirmed the host also lacks `mkfs.xfs`, and `mount -o loop` of an
+  image failed ("wrong fs type"; /dev/loop0 exists but cannot be attached).
+  So no thin-mode (loop-xfs) pool was checked. The kill matrix therefore does
+  not cover XFS. The credentials write is plain POSIX (write, rename on one
+  directory), but this note makes no claim for XFS: rerun task 1.1 on the
+  maintainer's machine for a loop-xfs pool if D2's "not verified" sentence is
+  to be dropped for XFS. Thin-mode results are not reported as passed.
+
+### 1.1 Kill matrix, credentials rewrite (directory pool, copy mode)
+
+Method: the D2 sequence was run in a helper container (engine image,
+`--user 0`, pool bind-mounted at /pool, password through stdin only):
+`umask 077; cat > credentials.json.new; chown 10001:0; chmod 600; sync <tmp>;
+mv -f <tmp> credentials.json; sync /pool/engine`. The helper was held after
+step N and killed with `docker kill` (SIGKILL), then the file was checked,
+the engine container restarted (`docker restart sqlbranch-engine`), the file
+checked again, and the full sequence rerun after deleting a leftover
+`credentials.json.new`. "Old" is the format-1 content, "new" the format-2
+content of D2. Script kept only in the scratchpad.
+
+| Killed after | Temp file left | credentials.json after kill | after engine restart | rerun |
+|---|---|---|---|---|
+| 0 partial write (10 bytes of 184, stdin held open) | yes, mode 600 owner 0:0, 10 bytes | old, mode 600, owner 10001:0 | old, 600, 10001:0 | exit 0, new, 600, 10001:0 |
+| 1 temp write | yes, 600 0:0, 184 bytes | old, 600, 10001:0 | same | exit 0, new, 600, 10001:0 |
+| 2 chown | yes, 600 10001:0 | old, 600, 10001:0 | same | exit 0, new, 600, 10001:0 |
+| 3 chmod | yes, 600 10001:0 | old, 600, 10001:0 | same | exit 0, new, 600, 10001:0 |
+| 4 sync | yes, 600 10001:0 | old, 600, 10001:0 | same | exit 0, new, 600, 10001:0 |
+| 5 rename | none | new, 600, 10001:0 | same | exit 0, new, 600, 10001:0 |
+| 6 directory sync | none | new, 600, 10001:0 | same | exit 0, new, 600, 10001:0 |
+
+Every row parsed as complete JSON, equal to the whole old or whole new
+content. A kill never left a mix. The leftover temp file survives an engine
+restart (the rerun deleted it before writing; leftover temp files are what
+`status` must list, D11). A first attempt of the matrix ran the helper as the
+image's default user (`mssql`, 10001), where `chown 10001:0` fails; the
+real write path must run the helper as root, as the existing `PoolWork`
+helper does. That run is discarded.
+
+Limits: this is a process kill (SIGKILL of the writer container). It is not a
+power-loss or kernel-crash test; the effect of `sync` on durability was not
+observable here.
+
+### 1.1 Session application locks released on client kill
+
+A `sqlcmd` session in `master` took two session-owned exclusive application
+locks with `sp_getapplock ... @LockOwner = 'Session', @LockTimeout = 0`:
+`sqlbranch:image:probe` (image-lock name form) and `sqlbranch:pool-upgrade`,
+then waited. A second session polled `APPLOCK_TEST` for both every 20 ms and
+printed the engine time when both were free. The holder was killed with
+`kill -9` (SIGKILL; the OS closes the socket). Four runs, kill command issued
+to free, including about 80 ms of `docker exec` start-up in the measurement:
+about 0.08 s, 0.10 s, 0.09 s, 0.09 s. So the locks are free within about
+0.1 s after the client process dies. Not measured: a client that disappears
+without closing its connection (host power loss, network partition); there
+the engine releases the lock only when it notices the dead connection, which
+can take much longer. Design text that relies on "free within N seconds"
+should say it holds for a killed process, not for a lost network.
+
+### 1.2 Released 0.2.2 against a branch with D5 fields
+
+`dotnet tool install --tool-path <dir> SqlBranch --version 0.2.2`, reported
+version `0.2.2`. Format-1 pool (directory, copy mode), image `tiny` built from
+one SQL script (current build, 8.49 MiB), branch `b1` created from it. The
+`branch.json` of `b1` had `imageVersion` ("tiny@20261124T134338000Z") and
+`baseKnown` (true) added by hand (D5 fields). Then, with 0.2.2:
+
+| Command | Exit | Result |
+|---|---|---|
+| `image list` | 0 | one row, tiny, 1 branch |
+| `branch list` | 0 | one row, b1, image tiny, online |
+| `image list --format json` | 0 | one image, `branches` 1, `branchNames` ["b1"], no new fields |
+| `branch list --format json` | 0 | b1, `imageRemoved` false, no `imageVersion` field in the output |
+| `image export tiny --to <file>.sbimg` | 0 | 341586-byte archive written (2 files, 8.49 MiB) |
+
+(The option is `--to`; a first call with `--out` and one with a positional
+path failed with exit 2 for the syntax only.) 0.2.2 ignores the unknown
+`branch.json` fields and does not print them. D5's "not verified yet" is now
+verified for 0.2.2 `image list`, `branch list` and `image export`; D5 needs
+no revision.
 
 ## What a 0.2.2 client does on a pool upgraded to format 2
 
