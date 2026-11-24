@@ -221,6 +221,47 @@ column after `BRANCHES`; the format-1 table is the 0.2.2 table.
 
 Again the first is a format-1 pool and the second a format-2 pool.
 
+## Build, import and branch version fields
+
+`image build` and `image import` add `image.version`: the version ID on a format-2 pool, null on a format-1 pool.
+
+```json
+{ "command": "image build", "ok": true,
+  "image": { "name": "shop", "version": null, "cloneMode": "thin", "...": "..." } }
+```
+
+```json
+{ "command": "image import", "ok": true, "from": "shop.sbimg", "cloneMode": "thin",
+  "image": { "name": "shop3", "version": "shop3@20261201T090000000Z", "branches": 0, "...": "..." } }
+```
+
+The first document is a format-1 pool and the second a format-2 pool; `image build` on a format-2 pool has the same shape
+with an ID, for example `"version": "shop@20261201T020000000Z"`.
+
+`branch create` and `branch reset` add `branch.imageVersion`, and each `branch list` row adds `imageVersion`: the base version
+ID on a format-2 pool, null on a format-1 pool, for an unknown base and for a base removed before the upgrade. On a format-2
+pool `imageRemoved` is true when the base version is no longer in the name's catalog, also after the name was used again.
+
+```json
+{ "command": "branch create", "ok": true,
+  "branch": { "name": "dev2", "image": "shop", "imageVersion": "shop@20261201T090000000Z", "cloneMode": "thin", "...": "..." } }
+```
+
+```json
+{ "command": "branch reset", "ok": true,
+  "branch": { "name": "dev2", "image": "shop", "imageVersion": "shop@20261201T090000000Z", "cloneMode": "thin", "...": "..." } }
+```
+
+```json
+{ "command": "branch list", "ok": true,
+  "branches": [ { "name": "dev1", "image": "shop", "imageVersion": "shop@20261119T020000000Z", "imageRemoved": true, "state": "online", "...": "..." },
+                { "name": "dev0", "image": "shop", "imageVersion": null, "imageRemoved": false, "state": "online", "...": "..." } ] }
+```
+
+In text, an `Image version:` line follows the first line of `branch create` and `branch reset`, and the `IMAGE` column of
+`branch list` shows the version ID instead of the name, followed by `(removed)` when it was removed. A format-1 pool prints
+the 0.2.2 text.
+
 ## Doctor output
 
 `sqlbranch doctor --format json` returns a `checks` array. Each entry contains

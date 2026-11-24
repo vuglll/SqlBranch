@@ -24,6 +24,9 @@ public sealed record ImageEntry(string Name, ImageManifest Manifest, IReadOnlyLi
     public IReadOnlyList<string> Versions { get; init; } = [];
 }
 
+/// <summary>A version read from the pool: its ID (null for an image no command adopted yet), its folder relative to the image folder, and its manifest.</summary>
+public sealed record ImageVersionData(string? Id, string Directory, ImageManifest Manifest);
+
 /// <summary>What the pool holds: the images, and a note for each folder that looked like one but could not be read.</summary>
 public sealed record ImageListing(IReadOnlyList<ImageEntry> Images, IReadOnlyList<string> Warnings)
 {
@@ -274,7 +277,16 @@ public sealed class ImageCatalog
     /// The manifest of the current version of an image on a format-2 pool, or null when the name does not exist.
     /// Used by <c>branch create</c> (design D3).
     /// </summary>
-    public static async Task<ImageManifest?> ReadCurrentManifestAsync(IContainerRuntime runtime, string engineName, string name, CancellationToken cancellationToken)
+    public static async Task<ImageManifest?> ReadCurrentManifestAsync(IContainerRuntime runtime, string engineName, string name, CancellationToken cancellationToken) =>
+        (await ReadVersionAsync(runtime, engineName, name, null, cancellationToken).ConfigureAwait(false))?.Manifest;
+
+    /// <summary>
+    /// One version of an image on a format-2 pool: the current one when <paramref name="versionId"/> is null, otherwise the version of
+    /// that ID. Returns null when the name does not exist or its catalog does not list the version. An image an older client wrote
+    /// (a manifest and no catalog, D3a) is the current version with a null <see cref="ImageVersionData.Id"/>. The folder and the
+    /// manifest come from the same catalog entry.
+    /// </summary>
+    public static async Task<ImageVersionData?> ReadVersionAsync(IContainerRuntime runtime, string engineName, string name, string? versionId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         var catalogPath = Quoting.Shell(ImageCatalogFile.Path(name));
@@ -284,19 +296,28 @@ public sealed class ImageCatalog
         var value = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(l => l.StartsWith("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))?["SQLBRANCH_CATALOGFILE=".Length..];
         string directory;
+        string? id = null;
         if (value is null or "none")
         {
+            if (versionId is not null)
+            {
+                return null;
+            }
+
             directory = ".";
         }
         else
         {
             var catalog = TryParseCatalog(value)
                 ?? throw new SqlBranchException(ErrorCodes.OperationFailed, $"The catalog of the image '{name}' cannot be read, so no branch can be made from it.");
-            directory = catalog.CurrentDirectory ?? string.Empty;
-            if (directory.Length == 0)
+            id = versionId ?? catalog.Current;
+            var entry = id is null ? null : catalog.Versions.FirstOrDefault(v => v.Id == id);
+            if (entry is null)
             {
                 return null;
             }
+
+            directory = entry.Dir;
         }
 
         var path = Quoting.Shell($"{ImagePaths.Image(name)}/{directory}/manifest.json");
@@ -310,8 +331,9 @@ public sealed class ImageCatalog
             return null;
         }
 
-        return TryParseManifest(text)
+        var manifest = TryParseManifest(text)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed, $"The manifest of the image '{name}' cannot be read, so no branch can be made from it.");
+        return new ImageVersionData(id, directory, manifest);
     }
 
     private static ImageManifest? TryParseManifest(string base64)

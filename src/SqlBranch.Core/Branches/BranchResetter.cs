@@ -71,10 +71,25 @@ public sealed class BranchResetter
                 $"Another command is building or removing the image '{image}'. Wait for it to finish, then run the command again.");
         }
 
-        var manifest = await engine.ReadManifestAsync(
-            image,
-            $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.",
-            cancellationToken).ConfigureAwait(false);
+        // On format 2 the base is the version recorded at create (design D5); a removed or unknown base is refused here, before
+        // any connection is closed. On format 1 the base is the image.
+        string imageDirectory = ".";
+        string? version = null;
+        ImageManifest manifest;
+        if (engine.PoolFormat >= 2)
+        {
+            var found = await ReadBaseAsync(engine, name, record, cancellationToken).ConfigureAwait(false);
+            manifest = found.Manifest;
+            imageDirectory = found.Directory;
+            version = found.Id;
+        }
+        else
+        {
+            manifest = await engine.ReadManifestAsync(
+                image,
+                $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.",
+                cancellationToken).ConfigureAwait(false);
+        }
 
         // 2. requireThin (exit 3), then room for a full copy (exit 1): both before any file is made. A branch that was made as a
         // full copy stays one and is exempt from requireThin, as it was at create.
@@ -100,7 +115,7 @@ public sealed class BranchResetter
         try
         {
             await engine.ShellAsync(
-                $"set -e; rm -rf {Quoting.Shell(next)}; mkdir {Quoting.Shell(next)}; " + BranchFiles.CloneCommands(manifest, image, mode, next),
+                $"set -e; rm -rf {Quoting.Shell(next)}; mkdir {Quoting.Shell(next)}; " + BranchFiles.CloneCommands(manifest, image, mode, next, imageDirectory),
                 "cloning the image's files", cancellationToken).ConfigureAwait(false);
 
             // 4. The old database goes: connections are closed with a rollback and the drop deletes its files.
@@ -137,7 +152,7 @@ public sealed class BranchResetter
         // The branch is attached. A record that cannot be updated is a different failure from an attach that failed.
         try
         {
-            await engine.WriteRecordAsync(name, record with { CloneMode = CloneModeNames.Of(mode), State = null }, cancellationToken).ConfigureAwait(false);
+            await engine.WriteRecordAsync(name, record with { CloneMode = CloneModeNames.Of(mode), State = null, ImageVersion = version ?? record.ImageVersion, BaseKnown = version is null ? record.BaseKnown : true }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -146,7 +161,41 @@ public sealed class BranchResetter
                 $"'sqlbranch branch list' shows it as broken until the record is written. Run 'sqlbranch branch reset {name}' again to finish.");
         }
 
-        return new BranchCreateResult(name, image, mode, engine.Server, name, BranchCreator.LoginName);
+        return new BranchCreateResult(name, image, mode, engine.Server, name, BranchCreator.LoginName) { ImageVersion = version ?? record.ImageVersion };
+    }
+
+    /// <summary>
+    /// The version a format-2 branch is reset to: the recorded one, or the current version of the image for a record no format-2
+    /// command has written (design D5, D7). A removed or unknown base is <c>image_not_found</c> and names the way out.
+    /// </summary>
+    private async Task<ImageVersionData> ReadBaseAsync(BranchEngine engine, string name, BranchRecord record, CancellationToken cancellationToken)
+    {
+        var image = record.Image;
+        string Refusal(string what) =>
+            $"{what} Branch '{name}' is unchanged. Remove it with 'sqlbranch branch rm {name}' and create a new one with 'sqlbranch branch create {name} --from {image}'.";
+
+        if (record.BaseKnown is null)
+        {
+            return await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, null, cancellationToken).ConfigureAwait(false)
+                ?? throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                    $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.");
+        }
+
+        if (record.BaseKnown == false)
+        {
+            throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so the branch cannot be reset to it."));
+        }
+
+        if (record.ImageVersion is null)
+        {
+            throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                Refusal($"The image '{image}' that branch '{name}' was created from was removed before the pool upgrade, so the version it was created from no longer exists and the branch cannot be reset."));
+        }
+
+        return await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, record.ImageVersion, cancellationToken).ConfigureAwait(false)
+            ?? throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                Refusal($"The version {record.ImageVersion} of the image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset."));
     }
 
     private static async Task RemoveNextAsync(BranchEngine engine, string next)

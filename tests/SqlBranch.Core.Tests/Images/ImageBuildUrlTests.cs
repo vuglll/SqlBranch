@@ -301,6 +301,40 @@ public sealed partial class ImageBuildUrlTests
         Assert.Empty(_world.Connector.Credentials);
     }
 
+    private sealed class SetClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_url_build_publishes_the_first_version_on_a_format_2_pool_and_has_a_null_version_on_format_1(bool format2)
+    {
+        if (format2)
+        {
+            Format2Pool.Apply(_world);
+        }
+
+        _world.Clock = new SetClock(new DateTimeOffset(2026, 12, 1, 2, 0, 0, TimeSpan.Zero));
+
+        var run = BuildCli(S3Url);
+
+        Assert.Equal(0, run.Exit);
+        var version = run.Json.GetProperty("image").GetProperty("version");
+        if (format2)
+        {
+            Assert.Equal("shop@20261201T020000000Z", version.GetString());
+            Assert.True(IndexOf("/pool/images/shop/manifest.json") < IndexOf("/pool/images/.ids/shop.new"));
+            Assert.True(IndexOf("/pool/images/.ids/shop.new") < IndexOf("catalog.json.new"));
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Null, version.ValueKind);
+            Assert.DoesNotContain(_timeline, l => l.Contains("catalog.json", StringComparison.Ordinal));
+        }
+    }
+
     [Fact]
     public void A_secret_with_a_quote_is_doubled_in_the_statement_and_never_reaches_the_output()
     {

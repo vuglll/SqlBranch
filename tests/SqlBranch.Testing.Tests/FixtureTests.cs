@@ -170,6 +170,46 @@ public sealed class FixtureTests : IDisposable
         Assert.Equal("sqlbranch image build shop", (await Assert.ThrowsAsync<SqlBranchUnavailableException>(() => Create())).FixCommand);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reset_with_a_removed_or_unknown_base_throws_naming_a_new_branch_and_without_the_password(bool unknown)
+    {
+        await using var db = await Create();
+        _engine.CredentialsJson = SqlBranch.Core.Engine.CredentialsFile.Format2(Password, null).ToJson();
+        var record = new BranchRecord("shop", "thin", DateTimeOffset.UnixEpoch, new Dictionary<string, string>(),
+            ImageVersion: unknown ? null : "shop@20261201T090000000Z", BaseKnown: !unknown);
+        var previous = _runtime.ExecHandler;
+        var changed = false;
+        _runtime.ExecHandler = (name, args) =>
+        {
+            var script = args[^1];
+            if (script.Contains("SQLBRANCH_RECORD=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_RECORD=" + Encode(record.ToJson()));
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + Encode(new ImageCatalogFile("shop", "shop@20261203T020000000Z", [new ImageVersionRef("shop@20261203T020000000Z", ".")]).ToJson()));
+            }
+
+            changed |= script.Contains("base64 -d", StringComparison.Ordinal) || script.Contains("/next", StringComparison.Ordinal);
+            return previous(name, args);
+        };
+        _connector.Statements.Clear();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => db.ResetAsync());
+
+        Assert.Contains(db.Name, error.Message, StringComparison.Ordinal);
+        Assert.Contains("'shop'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("sqlbranch branch create", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("sqlbranch image build", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, error.Message, StringComparison.Ordinal);
+        Assert.False(changed);
+        Assert.DoesNotContain(_connector.Statements, s => s.Contains("DROP DATABASE", StringComparison.Ordinal) || s.Contains("SINGLE_USER", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Dispose_tolerates_missing_branch_and_connection_failure()
     {

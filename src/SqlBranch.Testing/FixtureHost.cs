@@ -89,6 +89,11 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
         catch (Exception) { /* A user log sink must not prevent cleanup. */ }
     }
 
+    /// <summary>
+    /// Turns a failure into the exception a test sees. The image is given for a create only. A reset passes none, so
+    /// <c>image_not_found</c> on a reset keeps the resetter's own text (create a new branch): rebuilding the image would not
+    /// restore the branch's old base (design D5).
+    /// </summary>
     internal Exception Failure(Exception ex, string? image = null)
     {
         var message = redactor.Redact(ex.Message);

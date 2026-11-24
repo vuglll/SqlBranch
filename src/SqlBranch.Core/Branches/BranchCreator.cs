@@ -19,6 +19,9 @@ namespace SqlBranch.Core.Branches;
 /// <param name="User">The login to connect with.</param>
 public sealed record BranchCreateResult(string Name, string Image, CloneMode Mode, string Server, string Database, string User)
 {
+    /// <summary>The version ID of the base on a format-2 pool; null on format 1, for an unknown base and for an image no command has adopted yet.</summary>
+    public string? ImageVersion { get; init; }
+
     public DateTimeOffset? ExpiresAt { get; init; }
     public IReadOnlyDictionary<string, string> Labels { get; init; } = new Dictionary<string, string>();
 }
@@ -76,6 +79,9 @@ public sealed class BranchCreator
 
         /// <summary>The attach was started, so a database named like the branch may be ours.</summary>
         public bool AttachStarted { get; set; }
+
+        /// <summary>The version the branch was cloned from on a format-2 pool (design D5).</summary>
+        public string? Version { get; set; }
     }
 
     /// <summary>
@@ -144,7 +150,7 @@ public sealed class BranchCreator
         }
 
         return new BranchCreateResult(name, image, mode, engine.Server, name, LoginName)
-        { ExpiresAt = record.ExpiresAt, Labels = record.Labels };
+        { ExpiresAt = record.ExpiresAt, Labels = record.Labels, ImageVersion = state.Version };
     }
 
     private async Task<CloneMode> RunStepsAsync(IEngineSession session, State state, BranchRecord record, bool copy, bool requireThin, int poolFormat, CancellationToken cancellationToken)
@@ -154,7 +160,9 @@ public sealed class BranchCreator
         var image = record.Image;
 
         // 1. The image exists and the name is free. Both are read under the locks, so neither can change meanwhile.
-        var manifest = await ReadManifestAsync(image, poolFormat, cancellationToken).ConfigureAwait(false);
+        var source = await ReadImageAsync(image, poolFormat, cancellationToken).ConfigureAwait(false);
+        var manifest = source.Manifest;
+        state.Version = source.Id;
         await RequireFreeNameAsync(session, name, cancellationToken).ConfigureAwait(false);
         var poolMode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName, _newId()).ConfigureAwait(false);
 
@@ -179,16 +187,17 @@ public sealed class BranchCreator
         // 3. Clone every file of the image. thin shares the blocks, copy writes full files. The image's files are
         // read-only, and so would a clone be, so the branch's own files are made writable for the engine.
         var data = BranchPaths.Data(name);
-        var script = $"set -e; mkdir {Quoting.Shell(data)}; " + BranchFiles.CloneCommands(manifest, image, mode, data);
+        var script = $"set -e; mkdir {Quoting.Shell(data)}; " + BranchFiles.CloneCommands(manifest, image, mode, data, source.Directory);
 
         await ShellAsync(script, "cloning the image's files", cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("clone", cancellationToken).ConfigureAwait(false);
 
         // 4. The record. It is written before the attach so that a client that dies between the clone and the attach
         // leaves a branch with a record and no database, which 'status' reports and 'branch rm' can clean up.
-        record = record with { CloneMode = CloneModeNames.Of(mode) };
-        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(record.ToJson()));
-        await ShellAsync($"printf %s {Quoting.Shell(encoded)} | base64 -d > {Quoting.Shell(BranchPaths.Json(name))}", "writing branch.json", cancellationToken).ConfigureAwait(false);
+        // On a format-2 pool the base is the version just read; an image no command has adopted yet has no ID, so its record
+        // carries no base fields (a legacy record, design D5).
+        record = record with { CloneMode = CloneModeNames.Of(mode), ImageVersion = state.Version, BaseKnown = state.Version is null ? null : true };
+        await ShellAsync(BranchEngine.RecordWriteScript(name, record), "writing branch.json", cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("record", cancellationToken).ConfigureAwait(false);
 
         // 5. Attach. A name is never part of a path or a statement unquoted: the paths are literals, the name a bracketed identifier.
@@ -207,11 +216,11 @@ public sealed class BranchCreator
         }
     }
 
-    private async Task<ImageManifest> ReadManifestAsync(string image, int poolFormat, CancellationToken cancellationToken)
+    private async Task<ImageVersionData> ReadImageAsync(string image, int poolFormat, CancellationToken cancellationToken)
     {
         if (poolFormat >= 2)
         {
-            return await ImageCatalog.ReadCurrentManifestAsync(_runtime, _engineName, image, cancellationToken).ConfigureAwait(false)
+            return await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, null, cancellationToken).ConfigureAwait(false)
                 ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{image}'. 'sqlbranch image list' shows the images.");
         }
 
@@ -225,7 +234,7 @@ public sealed class BranchCreator
 
         try
         {
-            return ImageManifest.FromJson(Encoding.UTF8.GetString(Convert.FromBase64String(value)));
+            return new ImageVersionData(null, ".", ImageManifest.FromJson(Encoding.UTF8.GetString(Convert.FromBase64String(value))));
         }
         catch (Exception ex) when (ex is JsonException or FormatException)
         {

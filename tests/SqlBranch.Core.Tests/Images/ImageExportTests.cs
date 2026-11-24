@@ -28,6 +28,7 @@ public sealed class ImageExportTests : IDisposable
     private bool _imageExists = true;
     private string? _credentialsJson;
     private string? _catalogJson;
+    private string? _versionDirectory;
 
     /// <summary>Scripts what the engine's tar delivers.</summary>
     private Func<CancellationToken, FakeStreamingProcess> _tar;
@@ -50,6 +51,7 @@ public sealed class ImageExportTests : IDisposable
                 {
                     _credentialsJson is null ? null : $"SQLBRANCH_POOLCRED|{System.Text.Json.JsonDocument.Parse(_credentialsJson).RootElement.GetProperty("format").GetInt32()}",
                     _catalogJson is null ? null : $"SQLBRANCH_CATALOG|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_catalogJson))}",
+                    _versionDirectory is null ? null : $"SQLBRANCH_VMANIFEST|shop|{_versionDirectory}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}",
                     _imageExists ? $"SQLBRANCH_IMAGE|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}" : null,
                 }.Where(l => l is not null)))
                 : FakeContainerRuntime.Ok();
@@ -207,6 +209,19 @@ public sealed class ImageExportTests : IDisposable
 
         Assert.Equal(2, result.Files);
         Assert.Equal(["tar", "-C", "/pool/images/shop/data", "-cf", "-", "--", "shop.mdf", "shop_log.ldf"], Assert.Single(_world.Runtime.StreamExecs).Command);
+    }
+
+    [Fact]
+    public async Task Export_streams_the_data_folder_of_the_same_catalog_entry_as_the_manifest()
+    {
+        var id = Format2Pool.VersionId("shop", "20261203T020000000Z");
+        _credentialsJson = Format2Pool.Credentials();
+        _versionDirectory = $"versions/{id}";
+        _catalogJson = new ImageCatalogFile("shop", id, [new ImageVersionRef(id, _versionDirectory)]).ToJson();
+
+        await Export(Dest());
+
+        Assert.Equal($"/pool/images/shop/versions/{id}/data", Assert.Single(_world.Runtime.StreamExecs).Command[2]);
     }
 
     [Fact]

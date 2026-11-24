@@ -103,8 +103,9 @@ public sealed partial class BacpacBuilder(
             throw new SqlBranchException("Could not verify the SqlBranch import engine and its loopback port.");
         }
 
-        var password = await EngineCredentials.ReadAsync(runtime, engine.Image, pool.Location, token).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(runtime, engine.Image, pool.Location, token).ConfigureAwait(false)
             ?? throw new SqlBranchException("The engine credentials are missing.");
+        var password = credentials.Password;
         redactor.Register(password);
         var endpoint = EngineEndpoint.Loopback(port);
         await using var session = await connector.ConnectAsync(endpoint, password, token).ConfigureAwait(false);
@@ -115,10 +116,18 @@ public sealed partial class BacpacBuilder(
         {
             throw new SqlBranchException(ErrorCodes.ImageExists, $"Another build of image '{image}' is running.");
         }
-        var imagePath = Quoting.Shell(ImagePaths.Image(image));
-        var occupied = BacpacOwnership.AnyOf($"[ -e {imagePath} ]", $"[ -L {imagePath} ]");
-        var exists = await ownership.ShellAsync($"if {occupied}; then echo exists; fi", token).ConfigureAwait(false);
-        if (exists.Length > 0)
+        bool exists;
+        if (credentials.Format >= 2)
+        {
+            exists = await ImageCatalog.NameExistsAsync(runtime, engine.Id, image, credentials.Format, token).ConfigureAwait(false);
+        }
+        else
+        {
+            var imagePath = Quoting.Shell(ImagePaths.Image(image));
+            var occupied = BacpacOwnership.AnyOf($"[ -e {imagePath} ]", $"[ -L {imagePath} ]");
+            exists = (await ownership.ShellAsync($"if {occupied}; then echo exists; fi", token).ConfigureAwait(false)).Length > 0;
+        }
+        if (exists)
         {
             throw new SqlBranchException(ErrorCodes.ImageExists, $"Image '{image}' already exists.");
         }
@@ -270,8 +279,15 @@ public sealed partial class BacpacBuilder(
                     var mode = await CloneProbe.ProbeInEngineAsync(runtime, token, engine.Id, uniqueId: operation.Id).ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
                     // Publish the complete directory while the operation record still owns staging.
-                    verifiedPublication = await ownership.PublishImageAsync(operation, manifest).ConfigureAwait(false);
-                    result = new ImageBuildResult(manifest, mode);
+                    string? version = null;
+                    ImageCatalogFile? catalog = null;
+                    if (credentials.Format >= 2)
+                    {
+                        version = await ImageVersions.AllocateAsync(runtime, engine.Id, manifest.Name, Clock ?? TimeProvider.System, token).ConfigureAwait(false);
+                        catalog = ImageVersions.FirstCatalog(manifest.Name, version);
+                    }
+                    verifiedPublication = await ownership.PublishImageAsync(operation, manifest, catalog).ConfigureAwait(false);
+                    result = new ImageBuildResult(manifest, mode) { Version = version };
                 }
 #pragma warning disable CA1031 // Leave a failed publication eligible for ownership-checked cleanup.
                 catch (Exception ex)

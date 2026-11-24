@@ -396,7 +396,7 @@ internal static partial class ImageCommands
                 {
                     var target = ArchiveManifestChecks.Check(reader.Head.Manifest, asName);
                     var context = CommandContext.RequireAsync(services, redactor, configFile, cancel.Token).GetAwaiter().GetResult();
-                    var imported = new ImageImporter(services.Runtime, services.Connector, redactor, services.EngineName) { Progress = progress }
+                    var imported = new ImageImporter(services.Runtime, services.Connector, redactor, services.EngineName, time: services.Clock) { Progress = progress }
                         .ImportAsync(context.Pool, context.Settings.Port, reader, target, cancel.Token).GetAwaiter().GetResult();
                     return DescribeImport(imported, url?.Url ?? source);
                 }
@@ -458,6 +458,7 @@ internal static partial class ImageCommands
         }
 
         var image = ImageJson(manifest);
+        image["version"] = result.Version;
         image["branches"] = 0;
         image["branchNames"] = new JsonArray();
         var payload = new JsonObject { ["from"] = from, ["cloneMode"] = mode, ["image"] = image };
@@ -578,7 +579,7 @@ internal static partial class ImageCommands
             Console.CancelKeyPress += OnCancel;
             try
             {
-                var built = new ImageBuilder(services.Runtime, services.Connector, redactor, services.EngineName) { Progress = progress }
+                var built = new ImageBuilder(services.Runtime, services.Connector, redactor, services.EngineName, services.Clock) { Progress = progress }
                     .BuildAsync(context.Pool, context.Settings.Port, urlRequest, cancel.Token).GetAwaiter().GetResult();
                 return Describe(built);
             }
@@ -607,7 +608,7 @@ internal static partial class ImageCommands
         }
         var request = new ImageBuildRequest(name, path, bytes, fromBak is null ? null : ImagePaths.ImportPathOf(path, context.Pool.Location), backupSet, keepRecoveryModel)
         { SourceScripts = scripts, PostScripts = post, ScriptTimeout = limit };
-        var result = new ImageBuilder(services.Runtime, services.Connector, redactor, services.EngineName)
+        var result = new ImageBuilder(services.Runtime, services.Connector, redactor, services.EngineName, services.Clock)
             .BuildAsync(context.Pool, context.Settings.Port, request, CancellationToken.None).GetAwaiter().GetResult();
         return Describe(result);
     }
@@ -635,6 +636,7 @@ internal static partial class ImageCommands
 
         text.AddRange(result.ScriptTimes.Select(t => FormattableString.Invariant($"{t.Name}: {t.Duration.TotalMilliseconds:F0} ms")));
         var image = ImageJson(manifest);
+        image["version"] = result.Version;
         image["cloneMode"] = mode;
         var payload = new JsonObject { ["image"] = image };
         if (progress is not null)

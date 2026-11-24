@@ -239,7 +239,8 @@ public sealed partial class BranchCreateTests
         Create();
 
         var script = _timeline.Single(l => l.Contains("base64 -d", StringComparison.Ordinal));
-        Assert.Contains("> '/pool/branches/pr-142/branch.json'", script, StringComparison.Ordinal);
+        Assert.Contains("> '/pool/branches/pr-142/branch.json.new'", script, StringComparison.Ordinal);
+        Assert.Contains("mv -f '/pool/branches/pr-142/branch.json.new' '/pool/branches/pr-142/branch.json'", script, StringComparison.Ordinal);
         var json = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(RecordScript().Match(script).Groups["b64"].Value))).RootElement;
         Assert.Equal("shop", json.GetProperty("image").GetString());
         Assert.Equal("thin", json.GetProperty("cloneMode").GetString());

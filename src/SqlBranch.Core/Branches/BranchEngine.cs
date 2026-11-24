@@ -135,8 +135,15 @@ internal sealed class BranchEngine : IAsyncDisposable
     /// <summary>Writes <c>branch.json</c>.</summary>
     public async Task WriteRecordAsync(string name, BranchRecord record, CancellationToken cancellationToken)
     {
+        await ShellAsync(RecordWriteScript(name, record), "writing branch.json", cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The script that writes <c>branch.json</c> to <c>branch.json.new</c> and renames it over the record (design D11).</summary>
+    public static string RecordWriteScript(string name, BranchRecord record)
+    {
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(record.ToJson()));
-        await ShellAsync($"printf %s {Quoting.Shell(encoded)} | base64 -d > {Quoting.Shell(BranchPaths.Json(name))}", "writing branch.json", cancellationToken).ConfigureAwait(false);
+        var temporary = Quoting.Shell(BranchPaths.Json(name) + ".new");
+        return $"printf %s {Quoting.Shell(encoded)} | base64 -d > {temporary} && sync {temporary} && mv -f {temporary} {Quoting.Shell(BranchPaths.Json(name))}";
     }
 
     /// <summary>The engine has a database of this name.</summary>

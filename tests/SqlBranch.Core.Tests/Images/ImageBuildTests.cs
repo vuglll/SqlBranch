@@ -29,6 +29,7 @@ public sealed partial class ImageBuildTests
 
     /// <summary>What the engine says about the image folder on a format-2 pool: <c>none</c>, <c>legacy</c> or <c>catalog.json</c> as base64.</summary>
     private string _catalogFile = "none";
+    private string _lastId = "none";
     private int _fileQueries;
     private bool _renamed;
     private string _recoveryModel = "FULL";
@@ -73,6 +74,11 @@ public sealed partial class ImageBuildTests
             if (script.Contains("SQLBRANCH_FREE=", StringComparison.Ordinal))
             {
                 return FakeContainerRuntime.Ok($"SQLBRANCH_FREE={_free - _staged}");
+            }
+
+            if (script.Contains("SQLBRANCH_LASTID=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_LASTID=" + _lastId);
             }
 
             if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))

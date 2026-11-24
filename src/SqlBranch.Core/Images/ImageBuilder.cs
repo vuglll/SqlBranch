@@ -53,6 +53,9 @@ public sealed record ImageBuildRequest(
 /// <param name="Mode">The pool's clone mode.</param>
 public sealed record ImageBuildResult(ImageManifest Manifest, CloneMode Mode)
 {
+    /// <summary>The version ID of the published image on a format-2 pool; null on format 1.</summary>
+    public string? Version { get; init; }
+
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public IReadOnlyList<(string Name, TimeSpan Duration)> ScriptTimes { get; init; } = [];
 }
@@ -174,6 +177,9 @@ public sealed partial class ImageBuilder
 
         public ImageManifest? Manifest { get; set; }
 
+        /// <summary>The version ID published on a format-2 pool.</summary>
+        public string? Version { get; set; }
+
         public BacpacProvenance? Bacpac { get; init; }
         public BacpacOwnership? Ownership { get; init; }
         public BacpacOperation? Operation { get; init; }
@@ -267,7 +273,7 @@ public sealed partial class ImageBuilder
         }
 
         var mode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName).ConfigureAwait(false);
-        return new ImageBuildResult(state.Manifest!, mode) { ScriptTimes = state.ScriptTimes, Warnings = state.Warnings };
+        return new ImageBuildResult(state.Manifest!, mode) { ScriptTimes = state.ScriptTimes, Warnings = state.Warnings, Version = state.Version };
     }
 
     private async Task RunStepsAsync(IEngineSession session, State state, CancellationToken cancellationToken)
@@ -314,6 +320,13 @@ public sealed partial class ImageBuilder
         // The manifest is written last: an image exists once it has one.
         await WriteManifestAsync(state, cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("manifest", cancellationToken).ConfigureAwait(false);
+
+        // On a format-2 pool the first version is published through the catalog, after the seal (design D3, D4).
+        if (state.PoolFormat >= 2)
+        {
+            state.Version = await ImageVersions.PublishAsync(_runtime, _engineName, request.Name, _time, cancellationToken).ConfigureAwait(false);
+            await StepDoneAsync("catalog", cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task BuildBackupSourceAsync(IEngineSession session, State state, CancellationToken cancellationToken)

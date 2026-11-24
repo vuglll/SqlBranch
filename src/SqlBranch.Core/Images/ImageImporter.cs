@@ -33,6 +33,9 @@ public sealed class ImportCancelledException : OperationCanceledException
 /// <param name="Mode">The pool's clone mode.</param>
 public sealed record ImageImportResult(ImageManifest Manifest, CloneMode Mode)
 {
+    /// <summary>The version ID of the imported image on a format-2 pool; null on format 1.</summary>
+    public string? Version { get; init; }
+
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
@@ -56,19 +59,22 @@ public sealed class ImageImporter
     private readonly SecretRedactor _redactor;
     private readonly string _engineName;
     private readonly Func<string> _newId;
+    private readonly TimeProvider _time;
 
     public ImageImporter(
         IContainerRuntime runtime,
         IEngineConnector connector,
         SecretRedactor redactor,
         string engineName = ContainerLabels.EngineName,
-        Func<string>? newId = null)
+        Func<string>? newId = null,
+        TimeProvider? time = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
         _engineName = engineName;
         _newId = newId ?? (() => Guid.NewGuid().ToString("N")[..12]);
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>Runs after each step with the step's name. A test throws here to fail an import at a chosen step.</summary>
@@ -131,6 +137,9 @@ public sealed class ImageImporter
         public List<string> Warnings { get; } = [];
 
         public ImageManifest? Manifest { get; set; }
+
+        /// <summary>The version ID published on a format-2 pool.</summary>
+        public string? Version { get; set; }
 
         public bool Succeeded { get; set; }
 
@@ -218,7 +227,7 @@ public sealed class ImageImporter
         }
 
         var mode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName).ConfigureAwait(false);
-        return new ImageImportResult(state.Manifest!, mode) { Warnings = state.Warnings };
+        return new ImageImportResult(state.Manifest!, mode) { Warnings = state.Warnings, Version = state.Version };
     }
 
     private async Task RunStepsAsync(IEngineSession session, State state, CancellationToken cancellationToken)
@@ -265,6 +274,13 @@ public sealed class ImageImporter
         state.Manifest = source with { Name = state.Target };
         await state.Sealer.WriteManifestAsync(state.Manifest, cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("manifest", cancellationToken).ConfigureAwait(false);
+
+        // On a format-2 pool the first version is published through the catalog, after the seal (design D3, D4).
+        if (state.PoolFormat >= 2)
+        {
+            state.Version = await ImageVersions.PublishAsync(_runtime, _engineName, state.Target, _time, cancellationToken).ConfigureAwait(false);
+            await StepDoneAsync("catalog", cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task StepDoneAsync(string step, CancellationToken cancellationToken)

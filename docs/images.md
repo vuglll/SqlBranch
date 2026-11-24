@@ -325,6 +325,29 @@ manifest. These read-only commands never write a catalog. A catalog that cannot
 be read is a warning and the image is not listed. On a format-1 pool every one of
 these commands keeps the 0.2.2 behavior and ignores catalogs.
 
+### Version IDs
+
+On a format-2 pool every `image build` source (backup file, backup URL, scripts,
+BACPAC) and `image import` publishes the new image as the first version of its
+name, after the image is sealed: the manifest is written, then the ID, then
+`catalog.json`. A failed build or import adds no version and removes the image
+folder it made. The ID is `<name>@<UTC yyyyMMddTHHmmssfffZ>`, the publication time
+to the millisecond. An imported archive gets a local ID; its manifest is not
+changed, so an export and an import of one version stay byte-equal.
+
+The writer holds the image lock of the name and allocates the later of the clock
+and the last ID of the name plus one millisecond. The last ID is kept in
+`/pool/images/.ids/<name>`, one small file per name, written to `<name>.new` and
+renamed. `image rm` never deletes it, so a name that is removed and built again
+keeps increasing, also when the clock went back or both happened in one
+millisecond. Writers of different names never wait for each other. IDs are display
+values: a version ID is not accepted where an image name is expected
+(`invalid_name`, exit 2, no Docker command), and a failed build can leave a gap.
+
+`image build` and `image import` report the ID as `image.version` in JSON (null on
+a format-1 pool). `image export` streams the `data` folder of the catalog entry
+whose manifest it reads, never another version's files.
+
 ## Removing an image
 
 ```

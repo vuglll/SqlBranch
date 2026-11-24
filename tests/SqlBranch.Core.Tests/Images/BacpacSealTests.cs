@@ -73,6 +73,39 @@ public sealed class BacpacSealTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Version_goes_into_the_build_json_and_the_catalog_is_published_with_the_manifest_on_format_2(bool format2)
+    {
+        using var fixture = new Fixture();
+        if (format2)
+        {
+            Format2Pool.Apply(fixture.World);
+        }
+
+        var result = fixture.Build("json");
+
+        Assert.Equal(0, result.Exit);
+        using var json = JsonDocument.Parse(result.Out);
+        var version = json.RootElement.GetProperty("image").GetProperty("version");
+        if (!format2)
+        {
+            Assert.Equal(JsonValueKind.Null, version.ValueKind);
+            Assert.DoesNotContain(fixture.Timeline, l => l.Contains("catalog.json.new' &&", StringComparison.Ordinal) || l.Contains("/.ids/", StringComparison.Ordinal));
+            return;
+        }
+
+        Assert.Matches(@"^shop@\d{8}T\d{9}Z$", version.GetString());
+        Assert.Contains(fixture.Timeline, l => l.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal));
+        Assert.DoesNotContain(fixture.Timeline, l => l.Contains("echo exists", StringComparison.Ordinal));
+        fixture.AssertOrder("/pool/images/.ids/shop.new", "catalog.json.new", "mv -nT -- ");
+        var catalogWrite = fixture.Timeline.Single(l => l.Contains("catalog.json.new", StringComparison.Ordinal) && l.Contains("base64", StringComparison.Ordinal));
+        Assert.Contains($"{fixture.Operation.StagedImage}/catalog.json.new", catalogWrite, StringComparison.Ordinal);
+        Assert.Contains($"mv -f '{fixture.Operation.StagedImage}/catalog.json.new' '{fixture.Operation.StagedImage}/catalog.json'", catalogWrite, StringComparison.Ordinal);
+        fixture.AssertClean();
+    }
+
+    [Theory]
     [InlineData("rebuild-log", false)]
     [InlineData("seal", false)]
     [InlineData("seal", true)]

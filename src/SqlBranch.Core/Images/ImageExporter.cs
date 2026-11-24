@@ -49,7 +49,7 @@ public sealed class ImageExporter
     {
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentException.ThrowIfNullOrEmpty(destination);
-        var manifest = await FindManifestAsync(pool, name, cancellationToken).ConfigureAwait(false);
+        var (manifest, directory) = await FindImageAsync(pool, name, cancellationToken).ConfigureAwait(false);
 
         // Before any image file is read.
         if (!force && File.Exists(destination))
@@ -60,7 +60,7 @@ public sealed class ImageExporter
         var partial = $"{destination}{PartialMarker}{Guid.NewGuid().ToString("N")[..8]}";
         try
         {
-            await WritePartialAsync(name, manifest, partial, cancellationToken).ConfigureAwait(false);
+            await WritePartialAsync(name, manifest, directory, partial, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             Commit(partial, destination, force);
         }
@@ -83,7 +83,7 @@ public sealed class ImageExporter
     {
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentNullException.ThrowIfNull(store);
-        var manifest = await FindManifestAsync(pool, name, cancellationToken).ConfigureAwait(false);
+        var (manifest, directory) = await FindImageAsync(pool, name, cancellationToken).ConfigureAwait(false);
 
         // Before any image file is read; with --force neither this check nor the conditional commit runs.
         if (!force && await store.ExistsAsync(cancellationToken).ConfigureAwait(false))
@@ -97,7 +97,7 @@ public sealed class ImageExporter
         var writer = CreateWriter(name, manifest, sink);
         try
         {
-            await StreamArchiveAsync(name, manifest, writer, cancellationToken).ConfigureAwait(false);
+            await StreamArchiveAsync(name, manifest, directory, writer, cancellationToken).ConfigureAwait(false);
             await sink.FinishAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -115,14 +115,17 @@ public sealed class ImageExporter
         return new ImageExportResult(name, manifest.Files.Count, manifest.TotalBytes, sink.TotalBytes);
     }
 
-    private async Task<ImageManifest> FindManifestAsync(FoundPool pool, string name, CancellationToken cancellationToken)
+    private async Task<(ImageManifest Manifest, string Directory)> FindImageAsync(FoundPool pool, string name, CancellationToken cancellationToken)
     {
         NameRules.ValidateImage(name);
         ImageCatalog.RequireRunningEngine(pool);
 
         var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location).ConfigureAwait(false);
-        return listing.Images.FirstOrDefault(i => i.Name == name)?.Manifest
+        var entry = listing.Images.FirstOrDefault(i => i.Name == name)
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
+
+        // The files come from the folder of the same catalog entry as the manifest, never from another version's data.
+        return (entry.Manifest, entry.Directory);
     }
 
     private ImageArchiveWriter CreateWriter(string name, ImageManifest manifest, Stream output)
@@ -143,7 +146,7 @@ public sealed class ImageExporter
         };
     }
 
-    private async Task WritePartialAsync(string name, ImageManifest manifest, string partial, CancellationToken cancellationToken)
+    private async Task WritePartialAsync(string name, ImageManifest manifest, string directory, string partial, CancellationToken cancellationToken)
     {
         await using var file = new FileStream(partial, new FileStreamOptions
         {
@@ -154,17 +157,17 @@ public sealed class ImageExporter
             BufferSize = 1 << 16,
         });
         await using var writer = CreateWriter(name, manifest, file);
-        await StreamArchiveAsync(name, manifest, writer, cancellationToken).ConfigureAwait(false);
+        await StreamArchiveAsync(name, manifest, directory, writer, cancellationToken).ConfigureAwait(false);
         await file.FlushAsync(cancellationToken).ConfigureAwait(false);
         file.Flush(flushToDisk: true);
         AfterFlushToDisk?.Invoke();
     }
 
     /// <summary>Streams the image's files from the engine's <c>tar</c> into <paramref name="writer"/> and finishes the archive.</summary>
-    private async Task StreamArchiveAsync(string name, ImageManifest manifest, ImageArchiveWriter writer, CancellationToken cancellationToken)
+    private async Task StreamArchiveAsync(string name, ImageManifest manifest, string directory, ImageArchiveWriter writer, CancellationToken cancellationToken)
     {
 
-        string[] command = ["tar", "-C", ImagePaths.Data(name), "-cf", "-", "--", .. manifest.Files.Select(f => f.FileName)];
+        string[] command = ["tar", "-C", ImagePaths.Data(name, directory), "-cf", "-", "--", .. manifest.Files.Select(f => f.FileName)];
         await using var tar = await _runtime.ExecStreamAsync(_engineName, command, StreamDirection.Read, cancellationToken).ConfigureAwait(false);
 
         try

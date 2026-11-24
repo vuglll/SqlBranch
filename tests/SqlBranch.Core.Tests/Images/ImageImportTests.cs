@@ -164,7 +164,7 @@ public sealed partial class ImageImportTests : IDisposable
             _world.Services().LoadSettings(null), "/home/u/.sqlbranch/pool", CancellationToken.None);
 
     private ImageImporter Importer(Func<string, CancellationToken, Task>? afterStep = null, Action<string>? progress = null) =>
-        new(_world.Runtime, _world.Connector, _world.Redactor, newId: () => Id) { AfterStep = afterStep, Progress = progress };
+        new(_world.Runtime, _world.Connector, _world.Redactor, newId: () => Id, time: _world.Clock) { AfterStep = afterStep, Progress = progress };
 
     private async Task<byte[]> ValidAsync(ImageManifest? manifest = null) =>
         await ArchiveCrafter.ValidAsync(manifest ?? _manifest, _data, _log);
