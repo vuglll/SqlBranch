@@ -1,12 +1,74 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (unreleased)
+
+Pool format upgrade and image refresh ship together in this release.
+
+### Read this before you upgrade a pool
+
+- **`sqlbranch pool upgrade --yes` cannot be undone, and 0.2.x clients cannot
+  use the pool after it.** Stop every 0.2.x `sqlbranch` command and test run
+  that uses the pool first, then update both the `sqlbranch` tool and the
+  SqlBranch.Testing package in every test project to 0.3 or later. With the
+  engine running, 0.2.0, 0.2.1 and 0.2.2 `image rm`, `branch create`,
+  `branch list`, `status` and `engine start` exit 1 with `operation_failed`
+  and this message, with the pool unchanged, and SqlBranch.Testing 0.2.x
+  create throws the same text:
+
+  ```text
+  The engine credentials file in <pool> is not valid.
+  ```
+
+  It gives no hint to upgrade. With the engine stopped, 0.2.x `branch list`
+  exits 3 `engine_stopped` as before. 0.2.x `image list` and `image export`
+  still run, but only while the engine runs, and they show only the files at
+  the top of each image directory, not the current version.
+- **Tests that skip on the SqlBranch.Testing 0.2.x availability check
+  silently stop running after the upgrade.** The check returns false and
+  logs nothing, so those tests are skipped instead of failing, and a green
+  run can mean that nothing ran. Update the package in every test project,
+  including CI projects, and watch the skipped count.
+
+### Added
+
+- `sqlbranch pool upgrade --yes` moves a pool from format 1 to format 2. It
+  changes pool metadata only, never image or branch data, databases or the
+  engine container, and exits 0 without changes on a pool that is already
+  format 2. Only one upgrade runs at a time. An upgrade that was interrupted
+  or timed out blocks writes with `pool_upgrade_required` until the same
+  command is run again. A branch record it cannot read is left as it is with
+  a warning that names `sqlbranch branch rm <name>`.
+- Pool formats. `init` still creates format-1 pools, `status` reports the
+  format (`poolFormat`), and this release reads both formats.
+- Image version IDs on format-2 pools, with a UTC publication time to the
+  millisecond. IDs for a name keep increasing even when the clock goes back
+  or the name is removed and reused. Branches record their base version;
+  `branch reset` and fixture reset restore it. A removed or unknown base
+  makes reset fail without changing the branch. After the upgrade, a branch
+  older than its image's last build has an unknown base: remove it and create
+  it again.
+- Error codes `catalog_busy` (exit 1: a second upgrade, an upgrade that runs
+  out of time, or an image in use during adoption) and
+  `pool_upgrade_required` (exit 3: image and branch writes during an
+  unfinished upgrade; the fix is `sqlbranch pool upgrade --yes`).
+- `publishWait` / `SQLBRANCH_PUBLISH_WAIT` sets how long the upgrade waits for
+  running operations. The default is `10m`; accepted values are `1m` to
+  `1440m` or `1h` to `24h`. An invalid value fails every command with
+  `config_error`.
+- An image with an unreadable catalog on a format-2 pool shows in
+  `image list` as "catalog unreadable" (`catalogReadable` false), and
+  `sqlbranch image rm <name>` removes it.
+
+<!-- F4 placeholder: add-image-refresh task 7.2 adds its 0.3.0 items to this entry (Added, Changed, Fixed). -->
 
 ### Fixed
 
 - A BACPAC build that fails before reading the package, for example because
   the image name already exists, no longer reports "Detached database users:
   none" and zero counts. The detach results appear only once they are known.
+
+See [docs/engine.md](docs/engine.md#sqlbranch-pool-upgrade---yes) and
+[docs/testing.md](docs/testing.md#older-packages-on-an-upgraded-pool).
 
 ## 0.2.2 (2026-11-21)
 

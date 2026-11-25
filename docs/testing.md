@@ -73,6 +73,28 @@ The runnable projects are under `samples/Xunit`, `samples/NUnit` and `samples/MS
 - Use `await SqlBranchEnvironment.IsAvailableAsync()` to check engine reachability. A missing engine, stopped engine or missing image on create raises `SqlBranchUnavailableException`. Its `FixCommand` identifies the relevant CLI command.
 - Configuration follows the CLI. Environment variables override the repository and user settings. The library finds the nearest `.sqlbranch.yml` starting at the process working directory. Set `SqlBranchOptions.ConfigFile` to specify the repository config explicitly.
 
+## Older packages on an upgraded pool
+
+`sqlbranch pool upgrade --yes` cannot be undone and locks SqlBranch.Testing 0.2.x out of the pool. Before you run it,
+stop every 0.2.x test run that uses the pool, in CI as well, and then update both the `sqlbranch` tool and the
+SqlBranch.Testing reference in every test project to 0.3 or later. Updating the global tool does not update the package.
+See [engine.md](engine.md#older-tools-on-an-upgraded-pool) for what the upgrade changes.
+
+With the engine running, SqlBranch.Testing 0.2.0, 0.2.1 and 0.2.2 all behave the same on an upgraded pool: create
+throws `InvalidOperationException`, after the package writes `Could not prune expired fixtures: <message>` to standard
+error, and `SqlBranchEnvironment.IsAvailableAsync()` returns false. The message has no fix command:
+
+```text
+The engine credentials file in <pool> is not valid.
+```
+
+`<pool>` is the pool directory or `Docker volume <name>`. With the engine stopped the package reports the stopped
+engine, as before the upgrade.
+
+**Tests that skip when the 0.2.x availability check returns false are skipped silently after the upgrade.** The check
+logs nothing and the tests do not fail, so a green run can mean nothing ran. Look for skipped counts in CI, and update the
+package in every test project before you resume test runs.
+
 ## Parallel branches
 
 Set `SqlBranchEnvironment.MaxConcurrentBranches` once in test-runner setup to cap the number of live fixture branches in that process. The default is unlimited. Creates above the limit wait for disposal and honor their cancellation token. Each test-runner process has its own limit.

@@ -202,6 +202,60 @@ it never changes image or branch data files, manifests, databases, logins or the
 a full pool continues from what is recorded and gives the same IDs. On a pool that is already format 2 it changes nothing
 and exits 0.
 
+#### What the upgrade changes and never touches
+
+The upgrade gives each existing image its first version ID and records each branch's base as pinned, unknown or
+removed. It writes only `engine/credentials.json`, each image's `catalog.json`, the per-name ID records under
+`images/.ids/`, and each `branch.json`, every one through a temporary file in the same directory that is renamed into
+place. It never changes, moves or deletes image data files or manifests, branch data files, attached databases, or logins
+and credentials in SQL Server, and it never stops, restarts or reconfigures the engine container. The SQL sessions it
+opens only take application locks, so open branch connections stay open. This holds in thin and copy mode.
+
+**The upgrade cannot be undone.** No command returns a pool to format 1. Only one upgrade runs on a pool at a time; a
+second one exits 1 `catalog_busy` and changes nothing. `init` still creates format-1 pools in 0.3, and this release
+works with both formats.
+
+A branch record that the upgrade cannot read, or whose image name is not valid, does not stop the upgrade. The upgrade
+leaves that record untouched, prints one warning on standard error naming the branch, and finishes:
+
+```
+warning: The record of branch 'dev3' (/pool/branches/dev3/branch.json) cannot be read, so the upgrade left it as it is. Run 'sqlbranch branch rm dev3' to remove the branch.
+```
+
+The branch is not in any of the lists of the result. Remove it with `sqlbranch branch rm <name>`.
+
+#### Older tools on an upgraded pool
+
+After the upgrade, SqlBranch 0.2.x tools and SqlBranch.Testing 0.2.x packages cannot use the pool. This is the same
+for 0.2.0, 0.2.1 and 0.2.2 (checked against all three on 2026-11-24, see the
+[research note](research/2026-11-24-pool-format-upgrade-facts.md)). Before you run `sqlbranch pool upgrade --yes`,
+stop every 0.2.x tool and test run that uses the pool (see [Stop 0.2.x tools first](#stop-02x-tools-first-and-what-adoption-is)).
+
+With the engine running, a 0.2.x `image rm`, `branch create`, `branch list`, `status` and `engine start` exit 1 with
+`operation_failed` and this message. The same holds, by the 0.2.2 source, for `init` on the existing pool, `image build`,
+`image import` and every other branch command. They change nothing: every image hash and branch record stays as it was.
+
+```text
+The engine credentials file in <pool> is not valid.
+```
+
+`<pool>` is the pool directory or `Docker volume <name>`. The message does not say what to do, because the released code
+cannot be changed. **The fix is to update both the `sqlbranch` tool and the SqlBranch.Testing package** in every test
+project to 0.3 or later; updating the tool does not update the package. SqlBranch.Testing 0.2.x throws the same
+message from create, and its availability check returns false, so tests that skip on that check are skipped silently
+(see [testing.md](testing.md#older-packages-on-an-upgraded-pool)).
+
+These tools fail this way only while the engine runs. With the engine stopped, a 0.2.x `branch list` exits 3
+`engine_stopped` ("The engine is stopped. Run 'sqlbranch engine start' to start it."), as it did before the upgrade, and
+so do `image list` and `image export`. By the 0.2.2 source `engine start` and `init` read the credentials themselves and
+fail with the message above even then; that case was not run.
+
+0.2.x `image list` and `image export` do not read the credentials, so they still run on an upgraded pool, but only while
+the engine runs. They read the files at the top of each image directory, which are the first version while it is kept,
+and do not follow the format-2 catalog. When image refresh adds newer versions they can list or export an older version
+than the current one, and they do not see images that exist only in version folders. Use the updated tool for listing and
+exporting too.
+
 ## How later commands find the pool
 
 In order: the engine container's labels, `/var/lib/sqlbranch/pool.xfs`, the
@@ -235,7 +289,8 @@ Format 2 nests the login under `engine`, records the upgrade (`state` is
 `running` until the upgrade finishes, then `done`) and carries a note for
 people who open the file. It has no top-level `password`, so a 0.2.x tool that
 reads it stops with "The engine credentials file in <pool> is not valid." before
-it takes a lock. That is the fence of the pool upgrade. This release reads both
+it takes a lock. That is the fence of the pool upgrade (see
+[Older tools on an upgraded pool](#older-tools-on-an-upgraded-pool)). This release reads both
 formats. A file that says a format above 2 is refused with `operation_failed`;
 the message names the format and tells the user to update the `sqlbranch` tool
 and the SqlBranch.Testing package.
