@@ -211,10 +211,11 @@ read 2026-11-24.
    before the upgrade rewrote it can still take a lock afterwards. No
    mechanism lets SqlBranch list running 0.2.2 processes.
 
-Still to verify with the released 0.2.2 tool and SqlBranch.Testing 0.2.2
-(task 5.1 of `add-pool-format-upgrade`): that the observed message and exit
-code match points 1 to 5 on a real upgraded pool. Whether 0.2.2 `image list`
-ignores the new fields in `branch.json` is task 1.2.
+Task 5.1 ran points 1 to 5 against real upgraded pools; see "Older clients
+against an upgraded pool (task 5.1)" at the end of this note. Point 4 needs one
+correction: `image list` and `image export` still run, but only while the
+engine runs. Whether 0.2.2 `image list` ignores the new fields in
+`branch.json` is task 1.2.
 
 ## Facts checked for the second revision (2026-11-24)
 
@@ -300,3 +301,105 @@ Second run, same date, after the walk was split per clone mode: medians of 20 cr
 | `plain` | thin | 2146 ms | 2283 ms |
 
 The largest slowdown is 6.7%, under the 10% flag.
+
+## Older clients against an upgraded pool (task 5.1, run 2026-11-25)
+
+Environment: macOS, Docker Desktop (aarch64 VM, SQL Server 2022 image under
+emulation), .NET SDK 10. The pool was a managed loop-xfs pool (clone mode
+thin) on the Docker Desktop VM, engine `sqlbranch-engine` on 127.0.0.1:14330.
+The released tools have no setting for the engine name, volume or port, so the
+run used the product defaults. The machine had no SqlBranch container or
+volume before the run, and `teardown --force` removed everything afterwards.
+Released tools: `dotnet tool install SqlBranch --version <v> --tool-path`
+(package `SqlBranch`, command `sqlbranch`); fixture: a console project
+referencing `SqlBranch.Testing` `<v>` that prints
+`SqlBranchEnvironment.IsAvailableAsync()` and then calls
+`SqlBranchDatabase.CreateAsync("shop")`. The pool and the upgrade came from
+this build (HEAD 81b5550, `dotnet publish -c Release`). No password was
+printed. Hashes below are SHA-256 over the image `manifest.json`, the branch
+`branch.json` and every image data file, read with `docker exec` into the
+SqlBranch engine container only.
+
+Setup, this build:
+
+```
+$ sqlbranch init                                   # exit 0 (loop-xfs, thin)
+$ sqlbranch image build shop --from-scripts db     # exit 0
+$ sqlbranch branch create b1 --from shop           # exit 0
+$ sqlbranch pool upgrade --yes                     # exit 0
+The pool now uses format 2 (it used format 1).
+Image shop: version shop@20261125T024933906Z
+Branches pinned to the first version: b1
+$ sqlbranch pool upgrade --yes                     # exit 0
+The pool already uses format 2. Nothing was changed.
+```
+
+The upgrade rewrote `branches/b1/branch.json` (the pin); the image manifest
+and the image data hash did not change. The baseline for "unchanged" below was
+taken after the upgrade.
+
+### Engine running, 0.2.0, 0.2.1 and 0.2.2 (identical)
+
+Each of the four commands exits 1; with `--format json` each prints
+`ok: false`, `error.code` `operation_failed` and the same message:
+
+```
+$ sqlbranch image rm shop --force      # exit 1
+$ sqlbranch branch create b2 --from shop   # exit 1
+$ sqlbranch status                     # exit 1
+$ sqlbranch engine start               # exit 1
+error: The engine credentials file in /var/lib/sqlbranch/mnt is not valid.
+```
+
+`<pool>` was `/var/lib/sqlbranch/mnt`. After all four commands, for each
+version, the image manifest hash, the image data hash and the branch record
+hash were identical to the baseline (a diff of the full listing was empty).
+The image `shop` and branch `b1` still existed.
+
+Also exit 1 with the same message: `branch list`.
+
+Fixture (SqlBranch.Testing 0.2.0, 0.2.1, 0.2.2, engine running):
+
+```
+available=False
+Could not prune expired fixtures: The engine credentials file in /var/lib/sqlbranch/mnt is not valid.
+threw InvalidOperationException: The engine credentials file in /var/lib/sqlbranch/mnt is not valid.
+```
+
+The availability check returns `false`. `CreateAsync` throws
+`InvalidOperationException` with the message above, and the package also
+prints the line `Could not prune expired fixtures: <same message>` before it
+throws. The message has no fix command.
+
+`image list` (exit 0, lists `shop` with 1 branch) and `image export shop --to
+<file>` (exit 0, 340 KB archive) run on the upgraded pool with the engine
+running, for all three versions; the pool state was unchanged afterwards.
+
+### Engine stopped, 0.2.0, 0.2.1 and 0.2.2 (identical)
+
+After `engine stop` with the same released tool (exit 0):
+
+```
+$ sqlbranch branch list --format json   # exit 3, error.code engine_stopped
+The engine is stopped. Run 'sqlbranch engine start' to start it.
+$ sqlbranch image list                  # exit 3, same message
+$ sqlbranch image export shop --to f    # exit 3, same message, no file written
+```
+
+### Result
+
+- 0.2.0 and 0.2.1 behave exactly like 0.2.2 in every check above: same exit
+  codes, same code, same message text. The docs and release notes need no
+  per-version differences.
+- Correction to point 4 above and to task 5.2's wording: `image list` and
+  `image export` run on an upgraded pool only while the engine runs. With the
+  engine stopped they exit 3 `engine_stopped` (as they did before the upgrade),
+  like `branch list`. The docs must not say they work with the engine stopped.
+- Observed messages (quote these in the docs and CHANGELOG): "The engine
+  credentials file in <pool> is not valid." (CLI and fixture exception) and
+  "The engine is stopped. Run 'sqlbranch engine start' to start it."
+- Not covered: a thin-mode result was obtained (loop-xfs pool), so no skipped
+  thin tests apply to this run.
+- Cleanup: `sqlbranch teardown --force` (this build) removed the engine
+  container, the pool file and the mount; no SqlBranch container or Docker
+  volume remains.
