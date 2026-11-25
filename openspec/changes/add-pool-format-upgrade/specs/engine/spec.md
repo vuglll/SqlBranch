@@ -198,7 +198,7 @@ No command SHALL move a pool from format 2 back to format 1. Running `pool upgra
 While a pool upgrade has not finished, every command that changes images or branches and starts, or reaches its check after locking, MUST exit 3 with `error.code` "pool_upgrade_required", say the upgrade did not finish and name `sqlbranch pool upgrade --yes`. `image list`, `image export`, `branch list`, `branch conn`, `status` and `teardown --force` SHALL keep working.
 
 #### Scenario: Create during an unfinished upgrade
-- **WHEN** the clone mode is `thin` or `copy` and `sqlbranch pool upgrade --yes` was killed after it recorded shop's version and before crm's, and the user runs `sqlbranch branch create dev5 --from crm`
+- **WHEN** the clone mode is `thin` or `copy` and `sqlbranch pool upgrade --yes` was killed after it recorded crm's version and before shop's (images are processed in name order), and the user runs `sqlbranch branch create dev5 --from crm`
 - **THEN** the command exits with code 3, `error.code` is "pool_upgrade_required", the message names `sqlbranch pool upgrade --yes`, and no branch `dev5` exists
 - **AND** `sqlbranch image list` exits with code 0 and shows shop and crm
 
@@ -206,8 +206,8 @@ While a pool upgrade has not finished, every command that changes images or bran
 Running `pool upgrade --yes` again after an interruption, a timeout or a full pool SHALL finish the work, keep the IDs and bases already recorded, remove any temporary credentials file the earlier run left, and exit 0.
 
 #### Scenario: Killed in the middle
-- **WHEN** the clone mode is `thin` or `copy` and `sqlbranch pool upgrade --yes` started at 2026-12-01T09:00:00.000Z was killed after it recorded shop's version and before crm's (tested with a fake clock and a fake runtime)
-- **THEN** `sqlbranch pool upgrade --yes` exits 0, shop keeps `shop@20261201T090000000Z`, crm gets `crm@20261201T090000000Z`, and `sqlbranch status` exits 0
+- **WHEN** the clone mode is `thin` or `copy` and `sqlbranch pool upgrade --yes` started at 2026-12-01T09:00:00.000Z was killed after it recorded crm's version and before shop's (tested with a fake clock and a fake runtime)
+- **THEN** `sqlbranch pool upgrade --yes` exits 0, crm keeps `crm@20261201T090000000Z`, shop gets `shop@20261201T090000000Z`, and `sqlbranch status` exits 0
 - **AND** `sqlbranch branch create dev5 --from crm` then exits 0
 
 ### Requirement: Upgrade stops cleanly when the pool is full
