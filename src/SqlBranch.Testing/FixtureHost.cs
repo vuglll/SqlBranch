@@ -85,7 +85,7 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
     }
 
     internal Task ResetAsync(FoundPool pool, Settings settings, string name, CancellationToken ct) =>
-        new BranchResetter(runtime, connector, redactor, engineName).ResetAsync(pool, settings.Port, name, ct, settings.RequireThin);
+        new BranchResetter(runtime, connector, redactor, engineName, time: clock).ResetAsync(pool, settings.Port, name, ct, settings.RequireThin);
 
     internal Task RemoveAsync(FoundPool pool, Settings settings, string name) =>
         new BranchRemover(runtime, connector, redactor, engineName).RemoveAsync(pool, settings.Port, name, CancellationToken.None);

@@ -26,14 +26,17 @@ public sealed class BranchResetter
     private readonly SecretRedactor _redactor;
     private readonly string _engineName;
     private readonly Func<string> _newId;
+    private readonly TimeProvider _time;
 
     public BranchResetter(
         IContainerRuntime runtime,
         IEngineConnector connector,
         SecretRedactor redactor,
         string engineName = ContainerLabels.EngineName,
-        Func<string>? newId = null)
+        Func<string>? newId = null,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
@@ -70,6 +73,13 @@ public sealed class BranchResetter
         {
             // An upgrade holds every existing image's lock while it waits (design D8): say so, not "being built or removed".
             await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
+            // An image an older client wrote may have to be adopted by this command, which does not wait for the lock (design D7).
+            if (engine.PoolFormat >= 2 && record.BaseKnown is null &&
+                await ImageAdoption.BusyIfUnadoptedAsync(_runtime, _engineName, image, cancellationToken).ConfigureAwait(false) is { } busy)
+            {
+                throw busy;
+            }
+
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is building or removing the image '{image}'. Wait for it to finish, then run the command again.");
         }
@@ -171,8 +181,10 @@ public sealed class BranchResetter
     }
 
     /// <summary>
-    /// The version a format-2 branch is reset to: the recorded one, or the current version of the image for a record no format-2
-    /// command has written (design D5, D7). A removed or unknown base is <c>image_not_found</c> and names the way out.
+    /// The version a format-2 branch is reset to: the recorded one, or, for a record no format-2 command has written (an older
+    /// client wrote it after the upgrade), the first version when the branch was created at or after the image's <c>builtAt</c>
+    /// (design D7). An image an older client wrote is adopted first, but only once the base is known to be bindable, so a refusal
+    /// changes nothing. A removed or unknown base is <c>image_not_found</c> and names the way out.
     /// </summary>
     private async Task<ImageVersionData> ReadBaseAsync(BranchEngine engine, string name, BranchRecord record, CancellationToken cancellationToken)
     {
@@ -182,9 +194,20 @@ public sealed class BranchResetter
 
         if (record.BaseKnown is null)
         {
-            return await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, null, cancellationToken).ConfigureAwait(false)
+            var current = await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, null, cancellationToken).ConfigureAwait(false)
                 ?? throw new SqlBranchException(ErrorCodes.ImageNotFound,
                     $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.");
+
+            // The version whose files are at the top of the image folder is the one a 0.2.2 record can mean.
+            if (current.Directory != "." || record.CreatedAt < current.Manifest.BuiltAt)
+            {
+                throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                    Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so that version no longer exists for this branch and the branch cannot be reset."));
+            }
+
+            return current.Id is null
+                ? await ImageAdoption.AdoptAsync(_runtime, _engineName, engine.Session, image, current, _time, cancellationToken).ConfigureAwait(false)
+                : current;
         }
 
         if (record.BaseKnown == false)

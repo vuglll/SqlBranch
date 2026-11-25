@@ -128,6 +128,9 @@ public sealed partial class ImageBuilder
         /// <summary>The pool format read with the credentials: 1 or 2.</summary>
         public int PoolFormat { get; init; } = 1;
 
+        /// <summary>The pool, so the format can be read again just before the image is published (design D6 step 2).</summary>
+        public PoolLocation? Pool { get; init; }
+
         public ImageBuildRequest Request { get; } = request;
 
         public string Id { get; } = id;
@@ -238,7 +241,7 @@ public sealed partial class ImageBuilder
         // The format may have changed since the first read (design D8); act on what it is now.
         credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, engine.Image, pool.Location, session, cancellationToken).ConfigureAwait(false);
 
-        var state = new State(request, _newId()) { PoolFormat = credentials.Format, EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
+        var state = new State(request, _newId()) { PoolFormat = credentials.Format, Pool = pool.Location, EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
         // The build lock is what lets status tell a running build from a dead one.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Build(state.Id), cancellationToken).ConfigureAwait(false))
         {
@@ -325,8 +328,10 @@ public sealed partial class ImageBuilder
         await WriteManifestAsync(state, cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("manifest", cancellationToken).ConfigureAwait(false);
 
-        // On a format-2 pool the first version is published through the catalog, after the seal (design D3, D4).
-        if (state.PoolFormat >= 2)
+        // On a finished format-2 pool the first version is published through the catalog, after the seal (design D3, D4). The format is
+        // read again here: an upgrade may have started or finished since the build began, and an upgrade that is not finished leaves
+        // the image in the format-1 layout for a later command to adopt (design D6 step 2, D7).
+        if (state.Pool is { } pool && await PoolUpgradeGuard.PublishesThroughCatalogAsync(_runtime, _engineName, state.EngineImage, pool, cancellationToken).ConfigureAwait(false))
         {
             state.Version = await ImageVersions.PublishAsync(_runtime, _engineName, request.Name, _time, cancellationToken).ConfigureAwait(false);
             await StepDoneAsync("catalog", cancellationToken).ConfigureAwait(false);

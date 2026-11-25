@@ -59,4 +59,27 @@ public sealed partial class ImageImportTests
 
         Assert.True(Ran("rm -rf '/pool/images/shop2'"));
     }
+
+    [Theory]
+    [InlineData(SqlBranch.Core.Engine.UpgradeRecord.Done, true)]
+    [InlineData(SqlBranch.Core.Engine.UpgradeRecord.Running, false)]
+    public async Task An_import_that_began_on_format_1_publishes_by_the_format_it_reads_just_before_it_publishes(string state, bool catalog)
+    {
+        var previous = _world.Runtime.ExecHandler;
+        _world.Runtime.ExecHandler = (container, command) =>
+        {
+            if (command.Count >= 3 && command[2].Contains("base64 -d > '/pool/images/shop2/manifest.json'", StringComparison.Ordinal))
+            {
+                Format2Pool.Apply(_world, state);
+            }
+
+            return previous(container, command);
+        };
+
+        var result = await ImportAsync(await ValidAsync());
+
+        Assert.Equal(catalog, result.Version is not null);
+        Assert.Equal(catalog, Ran("catalog.json.new"));
+        Assert.Equal(catalog, Ran("/pool/images/.ids/shop2.new"));
+    }
 }

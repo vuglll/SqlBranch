@@ -86,6 +86,24 @@ internal sealed partial class UpgradeWorld
                 return result with { StdOut = result.StdOut + "\n" + string.Join('\n', TemporaryFiles.Keys.Select(p => "SQLBRANCH_UPGRADETEMP|" + p)) };
             }
 
+            if (script.Contains("SQLBRANCH_LASTID=", StringComparison.Ordinal))
+            {
+                var name = Regex.Match(script, @"/pool/images/\.ids/([^'/]+)'").Groups[1].Value;
+                return FakeContainerRuntime.Ok("SQLBRANCH_LASTID=" + (LastIds.GetValueOrDefault(name) ?? Images.GetValueOrDefault(name)?.IdFile ?? "none"));
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                var image = Images.GetValueOrDefault(Regex.Match(script, @"/pool/images/([^/']+)/").Groups[1].Value);
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + (image?.CatalogBase64 ?? (script.Contains("=legacy", StringComparison.Ordinal) && image is { HasManifest: true } ? "legacy" : "none")));
+            }
+
+            if (script.Contains("SQLBRANCH_ADOPT=", StringComparison.Ordinal))
+            {
+                var image = Images.GetValueOrDefault(Regex.Match(script, @"/pool/images/([^/']+)/").Groups[1].Value);
+                return FakeContainerRuntime.Ok("SQLBRANCH_ADOPT=" + (image?.CatalogBase64 is not null ? "catalog" : image is { HasManifest: true } ? "unadopted" : "none"));
+            }
+
             if (script.Contains("SQLBRANCH_RECORD=", StringComparison.Ordinal))
             {
                 var name = Regex.Match(script, @"/pool/branches/([^/]+)/branch.json").Groups[1].Value;
@@ -115,6 +133,7 @@ internal sealed partial class UpgradeWorld
                 if (id.Success)
                 {
                     var name = id.Groups["n"].Value;
+                    LastIds[name] = id.Groups["id"].Value;
                     Atomic("id:" + name, ImageVersions.IdFile(name), id.Groups["id"].Value,
                         () => Images[name] = Images[name] with { IdFile = id.Groups["id"].Value });
                     Writes.Add("ids:" + id.Groups["n"].Value);
@@ -242,6 +261,9 @@ internal sealed partial class UpgradeWorld
 
     public Dictionary<string, FakeImage> Images { get; } = [];
 
+    /// <summary>The per-name high-water mark files, which stay when an image is removed (design D4).</summary>
+    public Dictionary<string, string> LastIds { get; } = [];
+
     public List<string> Branches { get; } = [];
 
     public Dictionary<string, string> Records { get; } = [];
@@ -262,6 +284,8 @@ internal sealed partial class UpgradeWorld
         Branches.Add(name);
         Records[name] = new BranchRecord(image, "thin", createdAt ?? new DateTimeOffset(2026, 11, 20, 0, 0, 0, TimeSpan.Zero), new Dictionary<string, string>()).ToJson();
     }
+
+    public BranchRecord RecordOf(string name) => BranchRecord.FromJson(Records[name]);
 
     /// <summary>The catalog the upgrade wrote for an image, or null.</summary>
     public string? CatalogOf(string name) =>

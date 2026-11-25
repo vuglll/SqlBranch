@@ -279,6 +279,33 @@ temporary files: `engine/credentials.json.new`, `images/<name>/catalog.json.new`
 `images/.ids/<name>.new`, and `branches/<name>/branch.json.new`. If the pool fills,
 free space and rerun the same command.
 
+### Stop 0.2.x tools first, and what adoption is
+
+Before you run `sqlbranch pool upgrade --yes`, stop every SqlBranch 0.2.x CLI command and every test run that uses
+SqlBranch.Testing 0.2.x on the pool. SqlBranch cannot see running 0.2.x processes. A 0.2.2 command that read the old
+credentials file just before the upgrade wrote it can still take its locks afterwards, and a build, import or
+`branch create` of a name the upgrade did not wait for (a new image name, or a create from one) finishes in the old
+layout. The upgrade waits for commands that already hold the lock of an existing image or branch, for at most
+`publishWait`; it does not wait for those.
+
+What such a command leaves is still listed. An image written in the 0.2.2 layout after the upgrade (a `manifest.json` and
+no `catalog.json`) shows in `image list` with `version` null, `image export` exports its files and `image rm` removes it
+with `image.versions` `[]`. A branch record without a base shows its `imageVersion` as null. Neither is changed by a read:
+`image list`, `image export`, `branch list`, `branch conn` and `status` never adopt.
+
+The first command that writes with the item adopts it. `branch create` and `branch reset` give an image its first version
+ID by the usual rule (the clock at that moment, or one millisecond after the last ID the name had, so a name that was
+removed and reused still gets a larger ID than any it had) and write the catalog before the branch records its base.
+A branch record without base fields is bound at reset by the same rule as in the upgrade: pinned to the image's first
+version when its `createdAt` is at or after the manifest's `builtAt`, otherwise with an unknown base (it cannot be reset;
+`sqlbranch branch rm` and `branch create` are the way out); a branch whose image is gone has a removed base. A build or
+import of a name that such an image uses exits 1 `image_exists` and changes nothing.
+
+Adoption takes the image's lock exclusively and does not wait. When another command holds it, the command exits 1
+`catalog_busy`, names the image and changes nothing; run it again when the other command is done. A 0.3 build or import
+reads the pool format once more just before it publishes: on a finished format 2 it publishes through the catalog, and on
+format 1 or during an upgrade that has not finished it writes the 0.2.2 layout, which a later command adopts as above.
+
 `status` tests the upgrade lock without taking it. While the lock is held it shows
 “pool upgrade is running” and temporary files as in progress (exit 0). After the
 upgrade process dies, it reports the unfinished upgrade and each temporary file

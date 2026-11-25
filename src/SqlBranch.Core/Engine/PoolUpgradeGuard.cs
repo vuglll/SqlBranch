@@ -35,6 +35,21 @@ internal static class PoolUpgradeGuard
         return fresh;
     }
 
+    /// <summary>
+    /// The re-read of a build or import just before it publishes (design D6 step 2). True on a finished format 2: the image is
+    /// published through the catalog. False on format 1 and during an unfinished or running upgrade: the image is written in the
+    /// format-1 layout (manifest last) and a later command adopts it (D7). It never refuses: the build already holds its image lock
+    /// and has done its work.
+    /// </summary>
+    internal static async Task<bool> PublishesThroughCatalogAsync(
+        IContainerRuntime runtime, string engineName, string engineImage, PoolLocation pool, CancellationToken cancellationToken)
+    {
+        var fresh = await EngineCredentials.ReadThroughEngineAsync(runtime, engineName, engineImage, pool, cancellationToken).ConfigureAwait(false)
+            ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
+                $"The engine credentials are missing from {pool}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        return fresh.Format >= 2 && fresh.Upgrade is not { State: UpgradeRecord.Running };
+    }
+
     /// <summary>True while the upgrade command is alive: it holds the pool-upgrade lock.</summary>
     internal static Task<bool> IsLiveAsync(IEngineSession session, CancellationToken cancellationToken) =>
         EngineLocks.IsHeldWithoutTakingAsync(session, EngineLocks.PoolUpgrade, cancellationToken);

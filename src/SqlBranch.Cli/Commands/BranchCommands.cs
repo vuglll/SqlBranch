@@ -103,7 +103,7 @@ internal static class BranchCommands
         // The rules come first, so a bad name exits 2 even before init.
         NameRules.ValidateBranch(name);
         var context = CommandContext.RequireAsync(services, redactor, configFile, CancellationToken.None).GetAwaiter().GetResult();
-        var reset = new BranchResetter(services.Runtime, services.Connector, redactor, services.EngineName)
+        var reset = new BranchResetter(services.Runtime, services.Connector, redactor, services.EngineName, time: services.Clock)
             .ResetAsync(context.Pool, context.Settings.Port, name, CancellationToken.None, context.Settings.RequireThin).GetAwaiter().GetResult();
         return DescribeReset(reset);
     }

@@ -19,7 +19,7 @@ namespace SqlBranch.Core.Branches;
 /// <param name="User">The login to connect with.</param>
 public sealed record BranchCreateResult(string Name, string Image, CloneMode Mode, string Server, string Database, string User)
 {
-    /// <summary>The version ID of the base on a format-2 pool; null on format 1, for an unknown base and for an image no command has adopted yet.</summary>
+    /// <summary>The version ID of the base on a format-2 pool; null on format 1.</summary>
     public string? ImageVersion { get; init; }
 
     public DateTimeOffset? ExpiresAt { get; init; }
@@ -119,6 +119,13 @@ public sealed class BranchCreator
         {
             // An upgrade holds every existing image's lock while it waits (design D8): say so, not "being built or removed".
             await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
+            // An image an older client wrote has to be adopted by this command, which does not wait for the lock (design D7).
+            if (engine.PoolFormat >= 2 &&
+                await ImageAdoption.BusyIfUnadoptedAsync(_runtime, _engineName, image, cancellationToken).ConfigureAwait(false) is { } busy)
+            {
+                throw busy;
+            }
+
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is building or removing the image '{image}'. Wait for it to finish, then run the command again.");
         }
@@ -167,6 +174,12 @@ public sealed class BranchCreator
 
         // 1. The image exists and the name is free. Both are read under the locks, so neither can change meanwhile.
         var source = await ReadImageAsync(image, poolFormat, cancellationToken).ConfigureAwait(false);
+        if (poolFormat >= 2 && source.Id is null)
+        {
+            // An image an older client wrote after the upgrade: give it its first version before the base is recorded (design D7).
+            source = await ImageAdoption.AdoptAsync(_runtime, _engineName, session, image, source, _time, cancellationToken).ConfigureAwait(false);
+        }
+
         var manifest = source.Manifest;
         state.Version = source.Id;
         await RequireFreeNameAsync(session, name, cancellationToken).ConfigureAwait(false);
@@ -200,8 +213,7 @@ public sealed class BranchCreator
 
         // 4. The record. It is written before the attach so that a client that dies between the clone and the attach
         // leaves a branch with a record and no database, which 'status' reports and 'branch rm' can clean up.
-        // On a format-2 pool the base is the version just read; an image no command has adopted yet has no ID, so its record
-        // carries no base fields (a legacy record, design D5).
+        // On a format-2 pool the base is the version just read, adopted above when an older client wrote the image (design D5, D7).
         record = record with { CloneMode = CloneModeNames.Of(mode), ImageVersion = state.Version, BaseKnown = state.Version is null ? null : true };
         await ShellAsync(BranchEngine.RecordWriteScript(name, record), "writing branch.json", cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("record", cancellationToken).ConfigureAwait(false);

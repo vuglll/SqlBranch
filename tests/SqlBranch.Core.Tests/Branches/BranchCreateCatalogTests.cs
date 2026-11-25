@@ -75,16 +75,19 @@ public sealed partial class BranchCreateTests
     }
 
     [Fact]
-    public void On_a_format_2_pool_an_image_an_older_client_wrote_gives_a_record_without_base_fields()
+    public void On_a_format_2_pool_an_image_an_older_client_wrote_is_adopted_before_the_base_is_recorded()
     {
         Format2Pool.Apply(_world);
 
         var run = Create();
 
         Assert.Equal(0, run.Exit);
-        Assert.Equal(System.Text.Json.JsonValueKind.Null, run.Json.GetProperty("branch").GetProperty("imageVersion").ValueKind);
-        Assert.DoesNotContain("baseKnown", _timeline.Single(l => l.Contains("base64 -d", StringComparison.Ordinal)), StringComparison.Ordinal);
-        Assert.Null(WrittenRecord().BaseKnown);
+        var version = run.Json.GetProperty("branch").GetProperty("imageVersion").GetString();
+        Assert.StartsWith("shop@", version, StringComparison.Ordinal);
+        var record = WrittenRecord();
+        Assert.Equal(version, record.ImageVersion);
+        Assert.True(record.BaseKnown);
+        Assert.True(IndexOf("catalog.json.new") < IndexOf("base64 -d > '/pool/branches/"));
     }
 
     [Fact]

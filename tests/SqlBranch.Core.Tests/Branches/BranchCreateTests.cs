@@ -117,7 +117,7 @@ public sealed partial class BranchCreateTests
 
     private BranchRecord WrittenRecord()
     {
-        var script = _timeline.Single(l => l.Contains("base64 -d", StringComparison.Ordinal));
+        var script = _timeline.Single(l => l.Contains("base64 -d > '/pool/branches/", StringComparison.Ordinal));
         var b64 = RecordScript().Match(script).Groups["b64"].Value;
         return BranchRecord.FromJson(Encoding.UTF8.GetString(Convert.FromBase64String(b64)));
     }
