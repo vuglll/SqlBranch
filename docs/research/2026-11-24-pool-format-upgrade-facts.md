@@ -274,11 +274,12 @@ is settled only by task 5.1, which installs all three versions from NuGet
    `usage_error`. Refusing `pool upgrade --yes=true`, `--yes true` and
    `--yes --yes` therefore needs custom parsing and its own test.
 
+Verified on 2026-11-25 (`PoolFormatRecheckThinIntegrationTests` and `PoolFormatRecheckCopyIntegrationTests` passed on `loop-xfs` and `plain`, Docker Desktop macOS arm64): `docker exec` in the running engine reads the 600, uid-10001 credentials file, so the format re-read after locking needs no extra work container.
+
 Still not verified, and settled by tasks of the change:
 
 | Question | Settled by |
 |---|---|
-| Can `docker exec` in the running engine read the 600, uid-10001 credentials file, so the format re-read after locking needs no extra work container? | Task 4.6 (falls back to a work container if not) |
 | Is a pool-wide session application lock (`sqlbranch:pool-upgrade`) released when the upgrading client is killed? | Task 1.1, same check as the other session locks |
 | What 0.2.0 and 0.2.1 (tool and SqlBranch.Testing) do on an upgraded pool | Task 5.1 |
 
@@ -289,4 +290,13 @@ Measured by the orchestrator on 2026-11-25 (Docker Desktop, macOS arm64): fixtur
 | `loop-xfs` (thin) | 1950 ms | 1964 ms |
 | `plain` (copy) | 2220 ms | 2314 ms |
 
-Format 2 is not more than 10% slower on either backend.
+Second run, same date, after the walk was split per clone mode: medians of 20 create plus dispose, format 1 to format 2.
+
+| Pool backend | Clone mode | Format 1 | Format 2 |
+|---|---|---|---|
+| `loop-xfs` | thin | 1996 ms | 2129 ms |
+| `loop-xfs` | copy | 2221 ms | 2355 ms |
+| `plain` | copy | 2161 ms | 2223 ms |
+| `plain` | thin | 2146 ms | 2283 ms |
+
+The largest slowdown is 6.7%, under the 10% flag.

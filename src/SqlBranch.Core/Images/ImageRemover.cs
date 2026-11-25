@@ -61,8 +61,8 @@ public sealed class ImageRemover
         // The same lock a build of this name holds, so a removal and a build of one name cannot overlap.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false))
         {
-            // A running upgrade holds every existing image's lock (design D6 step 2): say so, not "a build or a removal is running".
-            // A dead one does not, so a busy lock then is somebody else's and keeps its own text.
+            // A running upgrade holds every existing image's lock (design D6 step 2), so a busy lock may be the upgrade's.
+            // Read the credentials to tell: an unfinished upgrade refuses with its own text, and any other busy lock keeps the generic text below.
             var current = await EngineCredentials.ReadThroughEngineAsync(_runtime, _engineName, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false);
             // Whatever the lock's owner, an unfinished upgrade refuses the removal, as after the lock, unless the upgrade is dead and
             // this name's catalog is unreadable (D13).

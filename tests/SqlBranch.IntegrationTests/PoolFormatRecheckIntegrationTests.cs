@@ -80,6 +80,7 @@ public abstract class PoolFormatRecheckScenarios(ImageEngineFixture fixture, ITe
         output.WriteLine("clone mode: " + await Kit.CloneModeAsync());
         await Kit.EnsureImageAsync("rcshop");
         await Kit.EnsureImageAsync("rccrm");
+        await Kit.EnsureImageAsync("rcdel");
         Assert.Equal(1, PoolFormat());
 
         // "Other commands do not upgrade" and "Create on a format-1 pool"
@@ -90,6 +91,11 @@ public abstract class PoolFormatRecheckScenarios(ImageEngineFixture fixture, ITe
         Assert.Equal(1, PoolFormat());
         await Kit.DropBranchAsync("rcdev3");
         await Kit.DropBranchAsync("rcdev2");
+
+        // "image rm --force" is not an upgrade either, even with a branch on the image.
+        Json(World.RunCli("branch", "create", "rcdev4", "--from", "rcdel", "--format", "json"));
+        Json(World.RunCli("image", "rm", "rcdel", "--force", "--format", "json"));
+        Assert.Equal(1, PoolFormat());
 
         // Fixture throughput on format 1.
         var format1 = await FixtureMedianAsync("rcshop");
