@@ -10,10 +10,11 @@ namespace SqlBranch.IntegrationTests;
 /// <summary>
 /// Task 4.6 on the real engine, in whatever clone mode the pool has: the exec read of the 600 credentials file, the commands that
 /// never upgrade, the fixture throughput on both formats, and list and export on a format-2 pool. The upgrade cannot be undone,
-/// so the walk is one test on the fixture's own engine, in the order the scenarios need.
+/// so the walk is one test on the fixture's own engine, in the order the scenarios need. The thin and the copy class below run the same
+/// scenarios on their own engines.
 /// </summary>
 [Trait("Category", "Integration")]
-public sealed class PoolFormatRecheckIntegrationTests(ImageEngineFixture fixture, ITestOutputHelper output) : IClassFixture<ImageEngineFixture>
+public abstract class PoolFormatRecheckScenarios(ImageEngineFixture fixture, ITestOutputHelper output)
 {
     private EngineWorld World => fixture.World!;
 
@@ -84,7 +85,6 @@ public sealed class PoolFormatRecheckIntegrationTests(ImageEngineFixture fixture
         // "Other commands do not upgrade" and "Create on a format-1 pool"
         Json(World.RunCli("branch", "create", "rcdev2", "--from", "rccrm", "--format", "json"));
         Json(World.RunCli("branch", "reset", "rcdev2", "--format", "json"));
-        Json(World.RunCli("image", "rm", "rccrm", "--force", "--format", "json"));
         Assert.Equal(1, PoolFormat());
         Json(World.RunCli("branch", "create", "rcdev3", "--from", "rcshop", "--format", "json"));
         Assert.Equal(1, PoolFormat());
@@ -104,29 +104,44 @@ public sealed class PoolFormatRecheckIntegrationTests(ImageEngineFixture fixture
             ? $"FLAG: format 2 is {(format2 / format1 - 1) * 100:F1}% slower than format 1 (more than 10%)"
             : $"format 2 is within 10% of format 1 ({(format2 / format1 - 1) * 100:F1}%)");
 
-        // "List and export on a format-2 pool": crm was removed above, shop stays.
+        // "List and export on a format-2 pool": the upgraded pool holds shop and crm, and crm is removed after the upgrade.
+        Json(World.RunCli("image", "rm", "rccrm", "--format", "json"));
         var listed = Json(World.RunCli("image", "list", "--format", "json")).GetProperty("images").EnumerateArray().ToArray();
         Assert.Contains(listed, i => i.GetProperty("name").GetString() == "rcshop");
         Assert.DoesNotContain(listed, i => i.GetProperty("name").GetString() == "rccrm");
         var archive = Path.Combine(fixture.ClientFolder, "rcshop.sbimg");
         Json(World.RunCli("image", "export", "rcshop", "--to", archive, "--format", "json"));
 
-        // Import on a format-1 pool: the test writes the format-1 file back over the credentials (the upgrade cannot be undone).
-        var password = World.Password;
-        var format1Json = JsonSerializer.Serialize(new { user = "sa", password });
-        var rewrite = await new SqlBranch.Core.Containers.SystemProcessRunner().RunAsync("docker",
-            ["exec", "-i", "-u", "0", World.EngineName, "sh", "-c",
-                "cat > /pool/engine/credentials.json.new && chown 10001:0 /pool/engine/credentials.json.new && chmod 600 /pool/engine/credentials.json.new && mv -f /pool/engine/credentials.json.new /pool/engine/credentials.json"],
-            null, CancellationToken.None, format1Json);
-        Assert.Equal(0, rewrite.ExitCode);
-        Assert.Equal(1, PoolFormat());
-        Json(World.RunCli("image", "import", archive, "--as", "rcshop2", "--format", "json"));
+        // The import goes to a genuinely fresh format-1 pool: a second engine of its own, never touched by an upgrade.
+        await using var fresh = new EngineWorld("4GB", plain: false);
+        {
+            Json(fresh.RunCli("init", "--format", "json"));
+            Assert.Equal(1, Json(fresh.RunCli("status", "--format", "json")).GetProperty("poolFormat").GetInt32());
+            Json(fresh.RunCli("image", "import", archive, "--as", "rcshop2", "--format", "json"));
+            Assert.Equal(1, Json(fresh.RunCli("status", "--format", "json")).GetProperty("poolFormat").GetInt32());
 
-        var rows = Json(World.RunCli("image", "list", "--format", "json")).GetProperty("images").EnumerateArray()
-            .ToDictionary(i => i.GetProperty("name").GetString()!);
-        static string Comparable(JsonElement row) => JsonSerializer.Serialize(row.EnumerateObject()
-            .Where(p => p.Name is not ("name" or "version" or "branches" or "branchNames" or "catalogReadable"))
-            .ToDictionary(p => p.Name, p => p.Value));
-        Assert.Equal(Comparable(rows["rcshop"]), Comparable(rows["rcshop2"]));
+            var original = Json(World.RunCli("image", "list", "--format", "json")).GetProperty("images").EnumerateArray()
+                .Single(i => i.GetProperty("name").GetString() == "rcshop");
+            var imported = Json(fresh.RunCli("image", "list", "--format", "json")).GetProperty("images").EnumerateArray()
+                .Single(i => i.GetProperty("name").GetString() == "rcshop2");
+            static string Comparable(JsonElement row) => JsonSerializer.Serialize(row.EnumerateObject()
+                .Where(p => p.Name is not ("name" or "version" or "branches" or "branchNames" or "catalogReadable"))
+                .ToDictionary(p => p.Name, p => p.Value));
+            Assert.Equal(Comparable(original), Comparable(imported));
+        }
     }
+}
+
+/// <summary>The walk on the default managed pool (clone mode thin).</summary>
+[Trait("Category", "Integration")]
+public sealed class PoolFormatRecheckThinIntegrationTests(ImageEngineFixture fixture, ITestOutputHelper output)
+    : PoolFormatRecheckScenarios(fixture, output), IClassFixture<ImageEngineFixture>
+{
+}
+
+/// <summary>The walk on a pool that cannot share blocks (clone mode copy).</summary>
+[Trait("Category", "Integration")]
+public sealed class PoolFormatRecheckCopyIntegrationTests(CopyEngineFixture fixture, ITestOutputHelper output)
+    : PoolFormatRecheckScenarios(fixture, output), IClassFixture<CopyEngineFixture>
+{
 }

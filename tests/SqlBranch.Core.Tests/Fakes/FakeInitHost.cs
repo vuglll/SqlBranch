@@ -63,8 +63,18 @@ internal sealed class FakeInitHost
             return FakeContainerRuntime.Ok(string.Join('\n', lines));
         }
 
+        if (script.Contains("SQLBRANCH_POOLFORMAT=", StringComparison.Ordinal))
+        {
+            RereadCount++;
+            return FakeContainerRuntime.Ok("SQLBRANCH_POOLFORMAT=" +
+                (CredentialsJson is null ? "none" : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(CredentialsJson))));
+        }
+
         return FakeContainerRuntime.Ok("SQLBRANCH_PROBE=" + EngineProbe);
     }
+
+    /// <summary>How many times the exec re-read of the credentials ran (design D8).</summary>
+    public int RereadCount { get; private set; }
 
     private string SpaceLine() =>
         string.Create(CultureInfo.InvariantCulture, $"SQLBRANCH_SPACE|{Space.Total} {Space.Used} {Space.Free}");

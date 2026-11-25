@@ -43,17 +43,26 @@ public static class EngineCredentials
     /// The whole credentials file in either format, or null when the pool has none. A format above
     /// <see cref="NewestFormat"/> is refused with <c>operation_failed</c> before anything else reads the pool.
     /// </summary>
-    public static async Task<CredentialsFile?> ReadFileAsync(
+    public static Task<CredentialsFile?> ReadFileAsync(
         IContainerRuntime runtime,
         string image,
         PoolLocation pool,
+        CancellationToken cancellationToken) =>
+        ReadFileCoreAsync(runtime, image, pool, execDetail: null, cancellationToken);
+
+    private static async Task<CredentialsFile?> ReadFileCoreAsync(
+        IContainerRuntime runtime,
+        string image,
+        PoolLocation pool,
+        string? execDetail,
         CancellationToken cancellationToken)
     {
         var result = await PoolWork.RunAsync(runtime, image, pool, ReadScript, readOnly: true, cancellationToken).ConfigureAwait(false);
         if (!TryParseReply(result, pool, out var file))
         {
             throw new SqlBranchException(ErrorCodes.OperationFailed,
-                $"Could not read the engine credentials from {pool} (exit code {result.ExitCode}).");
+                $"Could not read the engine credentials from {pool} (exit code {result.ExitCode})." +
+                (execDetail is null ? string.Empty : $" The read through the engine failed too: {execDetail}"));
         }
 
         return file;
@@ -61,12 +70,12 @@ public static class EngineCredentials
 
     // The file travels as base64. The runtime masks every registered secret in what a container prints,
     // so the plain JSON would come back with the password replaced by ***.
-    private static readonly string ReadScript = $"if [ -f {Path} ]; then echo {Prefix}$(base64 -w0 {Path}); else echo {Prefix}none; fi";
+    private static readonly string ReadScript = $"if [ -f {Path} ]; then c=$(base64 -w0 {Path}) || exit 1; echo {Prefix}$c; else echo {Prefix}none; fi";
 
     private const string ExecPrefix = "SQLBRANCH_POOLFORMAT=";
 
     /// <summary>The script of the exec re-read (design D8); it prints the file as base64 after <c>SQLBRANCH_POOLFORMAT=</c>.</summary>
-    internal static readonly string RereadScript = $"if [ -f {Path} ]; then echo {ExecPrefix}$(base64 -w0 {Path}); else echo {ExecPrefix}none; fi";
+    internal static readonly string RereadScript = $"if [ -f {Path} ]; then c=$(base64 -w0 {Path}) || exit 1; echo {ExecPrefix}$c; else echo {ExecPrefix}none; fi";
 
     private static bool TryParseReply(ContainerResult result, PoolLocation pool, out CredentialsFile? file, string prefix = Prefix)
     {
@@ -81,6 +90,13 @@ public static class EngineCredentials
         }
 
         var encoded = line[prefix.Length..];
+
+        // An empty payload is no answer (the reader could not read the file), never a file that is not valid.
+        if (encoded.Length == 0)
+        {
+            return false;
+        }
+
         if (encoded == "none")
         {
             return true;
@@ -119,7 +135,9 @@ public static class EngineCredentials
             return file;
         }
 
-        return await ReadFileAsync(runtime, image, pool, cancellationToken).ConfigureAwait(false);
+        var detail = result.StdErr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        var execDetail = $"exit code {result.ExitCode}{(detail is null ? string.Empty : ": " + detail)}";
+        return await ReadFileCoreAsync(runtime, image, pool, execDetail, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Writes the file readable and writable by the engine's user only.</summary>

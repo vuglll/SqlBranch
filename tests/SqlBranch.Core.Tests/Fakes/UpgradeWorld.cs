@@ -30,6 +30,10 @@ internal sealed partial class UpgradeWorld
         {
             var script = command.Count >= 3 ? command[2] : string.Join(' ', command);
             Scripts.Add(script);
+            if (script.Contains("SQLBRANCH_POOLFORMAT=", StringComparison.Ordinal))
+            {
+                return inner(container, command);
+            }
             if (script == PoolUpgrader.EnumerationScript)
             {
                 Writes.Add("enumerate");

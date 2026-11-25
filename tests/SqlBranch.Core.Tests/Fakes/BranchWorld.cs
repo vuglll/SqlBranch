@@ -22,6 +22,10 @@ internal sealed partial class BranchWorld
         {
             var script = command.Count >= 3 ? command[2] : string.Empty;
             Timeline.Add("sh: " + script);
+            if (script.Contains("SQLBRANCH_POOLFORMAT=", StringComparison.Ordinal))
+            {
+                return inner(container, command);
+            }
             if (script.Contains("SQLBRANCH_PROBE", StringComparison.Ordinal) || script.Contains("SQLBRANCH_BRANCH|", StringComparison.Ordinal))
             {
                 // The probe, and the listing script of status, which reads the host's branch folders.

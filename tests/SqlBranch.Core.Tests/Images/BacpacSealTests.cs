@@ -458,6 +458,24 @@ public sealed class BacpacSealTests
     }
 
     [Fact]
+    public void A_fence_written_between_the_first_read_and_the_image_lock_stops_the_build_before_any_import()
+    {
+        using var fixture = new Fixture();
+        fixture.World.Connector.OnTakeLock = taken =>
+        {
+            if (taken == EngineLocks.Image("shop")) { fixture.World.Host.CredentialsJson = Format2Pool.Credentials(UpgradeRecord.Running); }
+        };
+
+        var result = fixture.Build("json");
+
+        Assert.Equal(3, result.Exit);
+        Assert.Equal("pool_upgrade_required", JsonDocument.Parse(result.Out).RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.Null(fixture.Manifest);
+        Assert.Null(fixture.ImportPath);
+        Assert.DoesNotContain("import", fixture.Timeline);
+    }
+
+    [Fact]
     public void Import_failure_removes_both_packages()
     {
         using var fixture = new Fixture("import", mapped: true);

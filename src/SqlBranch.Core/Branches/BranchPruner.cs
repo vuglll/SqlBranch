@@ -57,7 +57,13 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
             }
             catch (SqlBranchException ex) when (ex.Code == ErrorCodes.PoolUpgradeRequired)
             {
-                throw;
+                // The refusal ends the prune; say what it had already removed, which the error would otherwise hide.
+                if (removed.Count == 0)
+                {
+                    throw;
+                }
+
+                throw new SqlBranchException(ex.Code, $"{ex.Message} Branches removed before the refusal: {string.Join(", ", removed)}.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

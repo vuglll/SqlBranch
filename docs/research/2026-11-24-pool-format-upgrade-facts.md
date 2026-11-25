@@ -279,6 +279,14 @@ Still not verified, and settled by tasks of the change:
 | Question | Settled by |
 |---|---|
 | Can `docker exec` in the running engine read the 600, uid-10001 credentials file, so the format re-read after locking needs no extra work container? | Task 4.6 (falls back to a work container if not) |
-| Fixture create throughput on a format-2 pool compared with format 1 | Task 4.6 |
 | Is a pool-wide session application lock (`sqlbranch:pool-upgrade`) released when the upgrading client is killed? | Task 1.1, same check as the other session locks |
 | What 0.2.0 and 0.2.1 (tool and SqlBranch.Testing) do on an upgraded pool | Task 5.1 |
+
+Measured by the orchestrator on 2026-11-25 (Docker Desktop, macOS arm64): fixture create plus dispose, median of 20 sequential runs.
+
+| Pool backend | Format 1 | Format 2 |
+|---|---|---|
+| `loop-xfs` (thin) | 1950 ms | 1964 ms |
+| `plain` (copy) | 2220 ms | 2314 ms |
+
+Format 2 is not more than 10% slower on either backend.

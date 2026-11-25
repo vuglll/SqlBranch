@@ -131,23 +131,80 @@ public sealed class PoolFormatRecheckTests
         Assert.Contains("crm", pool.Images.Keys);
     }
 
+    [Fact]
+    public void Image_build_that_meets_an_upgrade_after_its_lock_exits_3_and_changes_nothing()
+    {
+        var pool = Pool();
+        pool.World.Files["/backup/shop.bak"] = 100;
+        UpgradeStartsAt(pool, EngineLocks.Image("newshop"));
+
+        var run = Failure(pool.Run("image", "build", "newshop", "--from-bak", "/backup/shop.bak", "--format", "json"));
+
+        Assert.Equal(3, run.Exit);
+        Assert.Equal("pool_upgrade_required", run.Code);
+        Assert.DoesNotContain("newshop", pool.Images.Keys);
+        Assert.Empty(pool.Writes);
+        Assert.DoesNotContain(pool.World.Connector.Statements, s => s.Contains("RESTORE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Branch_rm_that_meets_an_upgrade_after_its_lock_exits_3_and_changes_nothing()
+    {
+        var pool = Pool();
+        UpgradeStartsAt(pool, EngineLocks.Branch("dev1"));
+        var record = pool.Records["dev1"];
+
+        var run = Failure(pool.Run("branch", "rm", "dev1", "--format", "json"));
+
+        Assert.Equal(3, run.Exit);
+        Assert.Equal("pool_upgrade_required", run.Code);
+        Assert.Equal(record, pool.Records["dev1"]);
+        Assert.True(pool.World.Connector.Databases.ContainsKey("dev1"));
+        Assert.DoesNotContain(pool.World.Connector.Statements, s => s.Contains("DROP DATABASE", StringComparison.Ordinal));
+        Assert.DoesNotContain(pool.Scripts, s => s.Contains("rm -rf", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Prune_that_meets_an_upgrade_after_a_branch_lock_exits_3_and_names_the_branches_it_had_removed()
+    {
+        var pool = Pool();
+        foreach (var name in new[] { "old1", "old2" })
+        {
+            pool.AddBranch(name);
+            pool.Records[name] = (SqlBranch.Core.Branches.BranchRecord.FromJson(pool.Records[name]) with { Ephemeral = true, ExpiresAt = DateTimeOffset.UnixEpoch }).ToJson();
+            pool.World.Connector.Databases[name] = [$"/pool/branches/{name}/data/Shop.mdf"];
+        }
+        UpgradeStartsAt(pool, EngineLocks.Branch("old2"));
+
+        var run = Failure(pool.Run("branch", "prune", "--format", "json"));
+
+        Assert.Equal(3, run.Exit);
+        Assert.Equal("pool_upgrade_required", run.Code);
+        Assert.Contains("Branches removed before the refusal: old1.", run.Message, StringComparison.Ordinal);
+        Assert.True(pool.Records.ContainsKey("old2"));
+        Assert.True(pool.Records.ContainsKey("dev1"));
+    }
+
     [Theory]
     [InlineData(true, false, "is running")]
     [InlineData(true, true, "is running")]
+    [InlineData(false, true, "did not finish")]
     public void Image_rm_of_an_unreadable_catalog_during_a_live_upgrade_exits_3_not_a_busy_lock(bool live, bool imageLocked, string text)
     {
         var pool = Pool();
         pool.Images["shop"] = pool.Images["shop"] with { CatalogBase64 = Convert.ToBase64String("broken"u8.ToArray()) };
+        if (!live) { pool.Images["crm"] = pool.Images["crm"] with { CatalogBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(Format2Pool.Catalog("crm", "crm@20261201T090000000Z"))), IdFile = "crm@20261201T090000000Z" }; }
         Format2Pool.Apply(pool.World, UpgradeRecord.Running);
         if (live) { pool.World.Connector.HeldLocks.Add(EngineLocks.PoolUpgrade); }
-        if (imageLocked) { pool.World.Connector.HeldLocks.Add(EngineLocks.Image("shop")); }
+        var target = live ? "shop" : "crm";
+        if (imageLocked) { pool.World.Connector.HeldLocks.Add(EngineLocks.Image(target)); }
 
-        var run = Failure(pool.Run("image", "rm", "shop", "--force", "--format", "json"));
+        var run = Failure(pool.Run("image", "rm", target, "--force", "--format", "json"));
 
         Assert.Equal(3, run.Exit);
         Assert.Equal("pool_upgrade_required", run.Code);
         Assert.Contains(text, run.Message, StringComparison.Ordinal);
-        Assert.Contains("shop", pool.Images.Keys);
+        Assert.Contains(target, pool.Images.Keys);
     }
 
     [Fact]
@@ -234,12 +291,57 @@ public sealed class PoolFormatRecheckTests
         var runtime = new FakeContainerRuntime();
         runtime.Containers["sqlbranch-engine"] = new ContainerInfo("sqlbranch-engine", "img", true,
             new Dictionary<string, string> { [ContainerLabels.Managed] = "true" }, []);
-        runtime.ExecHandler = (_, _) => FakeContainerRuntime.Fail(1, "cat: permission denied");
+        // The real script exits 1 here; the older shape (exit 0 with an empty payload) must not be read as a file that is not valid either.
+        runtime.ExecHandler = (_, _) => FakeContainerRuntime.Fail(1, "base64: /pool/engine/credentials.json: Permission denied");
         runtime.RunHandler = _ => FakeContainerRuntime.Ok(Reply("SQLBRANCH_CREDENTIALS=", Format2Pool.Credentials()));
 
         var file = await EngineCredentials.ReadThroughEngineAsync(runtime, "sqlbranch-engine", "img", Location, CancellationToken.None);
 
         Assert.Equal(2, file!.Format);
         Assert.Single(runtime.Runs);
+    }
+
+    [Fact]
+    public async Task An_empty_payload_from_the_exec_is_no_answer_and_falls_back()
+    {
+        var runtime = new FakeContainerRuntime();
+        runtime.Containers["sqlbranch-engine"] = new ContainerInfo("sqlbranch-engine", "img", true,
+            new Dictionary<string, string> { [ContainerLabels.Managed] = "true" }, []);
+        runtime.ExecHandler = (_, _) => FakeContainerRuntime.Ok("SQLBRANCH_POOLFORMAT=\n");
+        runtime.RunHandler = _ => FakeContainerRuntime.Ok(Reply("SQLBRANCH_CREDENTIALS=", Format2Pool.Credentials()));
+
+        var file = await EngineCredentials.ReadThroughEngineAsync(runtime, "sqlbranch-engine", "img", Location, CancellationToken.None);
+
+        Assert.Equal(2, file!.Format);
+        Assert.Single(runtime.Runs);
+    }
+
+    [Fact]
+    public async Task When_the_fallback_fails_too_the_error_carries_the_exec_failure()
+    {
+        var runtime = new FakeContainerRuntime();
+        runtime.Containers["sqlbranch-engine"] = new ContainerInfo("sqlbranch-engine", "img", true,
+            new Dictionary<string, string> { [ContainerLabels.Managed] = "true" }, []);
+        runtime.ExecHandler = (_, _) => FakeContainerRuntime.Fail(1, "base64: Permission denied\nsecond line");
+        runtime.RunHandler = _ => FakeContainerRuntime.Fail(1, "no space");
+
+        var error = await Assert.ThrowsAsync<SqlBranchException>(() =>
+            EngineCredentials.ReadThroughEngineAsync(runtime, "sqlbranch-engine", "img", Location, CancellationToken.None));
+
+        Assert.Contains("base64: Permission denied", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("second line", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_re_read_of_a_cli_command_goes_through_exec_and_starts_no_container()
+    {
+        var pool = Pool();
+        pool.World.Host.CredentialsJson = Format2Pool.Credentials();
+
+        Assert.Equal(0, pool.Run("branch", "rm", "dev1", "--format", "json").Exit);
+
+        // The first read is the only work container that reads the credentials; the re-read after the lock is a docker exec.
+        Assert.True(pool.World.Host.RereadCount > 0);
+        Assert.Equal(1, pool.World.Runtime.Runs.Count(r => FakeContainerRuntime.ScriptOf(r).Contains("SQLBRANCH_CREDENTIALS=", StringComparison.Ordinal)));
     }
 }

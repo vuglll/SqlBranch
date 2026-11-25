@@ -64,8 +64,10 @@ public sealed class ImageRemover
             // A running upgrade holds every existing image's lock (design D6 step 2): say so, not "a build or a removal is running".
             // A dead one does not, so a busy lock then is somebody else's and keeps its own text.
             var current = await EngineCredentials.ReadThroughEngineAsync(_runtime, _engineName, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false);
+            // Whatever the lock's owner, an unfinished upgrade refuses the removal, as after the lock, unless the upgrade is dead and
+            // this name's catalog is unreadable (D13).
             if (current is { Upgrade.State: UpgradeRecord.Running } &&
-                await PoolUpgradeGuard.IsLiveAsync(session, cancellationToken).ConfigureAwait(false))
+                await UpgradeRefusesAsync(session, name, current, pool, cancellationToken).ConfigureAwait(false))
             {
                 await PoolUpgradeGuard.RequireWritableAsync(current, session, cancellationToken).ConfigureAwait(false);
             }
@@ -130,6 +132,13 @@ public sealed class ImageRemover
         }
 
         return new ImageRemoval(name, entry.Branches) { Versions = entry.Versions };
+    }
+
+    private async Task<bool> UpgradeRefusesAsync(IEngineSession session, string name, CredentialsFile current, FoundPool pool, CancellationToken cancellationToken)
+    {
+        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, current).ConfigureAwait(false);
+        return listing.Images.FirstOrDefault(i => i.Name == name)?.CatalogReadable != false ||
+            await PoolUpgradeGuard.IsLiveAsync(session, cancellationToken).ConfigureAwait(false);
     }
 
     private Task<ContainerResult> ExecAsync(string script, CancellationToken cancellationToken) =>
