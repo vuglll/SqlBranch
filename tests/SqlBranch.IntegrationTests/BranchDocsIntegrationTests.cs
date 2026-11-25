@@ -117,8 +117,9 @@ public sealed partial class BranchDocsIntegrationTests(ImageEngineFixture fixtur
             await kit.RemoveImageFilesAsync("shop-full");
         }
 
+        // Format 2 retains .ids high-water marks after image removal.
         // Nothing the documented commands made is left.
-        var left = await world.Runtime.ExecAsync(world.EngineName, ["sh", "-c", "ls -A /pool/images; ls -A /pool/branches; ls -A /pool/build; find /pool -name '*.bak'"], CancellationToken.None);
+        var left = await world.Runtime.ExecAsync(world.EngineName, ["sh", "-c", "find /pool/images -mindepth 1 -maxdepth 1 ! -name .ids -printf '%f\\n'; ls -A /pool/branches; ls -A /pool/build; find /pool -name '*.bak'"], CancellationToken.None);
         Assert.Equal(string.Empty, left.StdOut.Trim());
     }
 }

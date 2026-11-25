@@ -41,3 +41,19 @@ public sealed class SqlPackageIntegrationFactAttribute : FactAttribute
         }
     }
 }
+
+/// <summary>A scenario that must begin with a format-1 fixture pool.</summary>
+public sealed class IntegrationFormat1FactAttribute : FactAttribute
+{
+    public IntegrationFormat1FactAttribute()
+    {
+        if (Environment.GetEnvironmentVariable(IntegrationFactAttribute.EnableVariable) != "1")
+        {
+            Skip = "Needs Docker. Set SQLBRANCH_IT=1 to run it.";
+        }
+        else if (EngineWorld.RequestedPoolFormat == 2)
+        {
+            Skip = "Requires a format-1 starting pool to verify the upgrade transition; SQLBRANCH_IT_POOL_FORMAT=2 upgrades the fixture before tests run.";
+        }
+    }
+}

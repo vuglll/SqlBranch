@@ -68,8 +68,9 @@ public sealed partial class ImageDocsIntegrationTests(ImageEngineFixture fixture
             Assert.DoesNotContain(world.Password, run.Out + run.Err, StringComparison.Ordinal);
         }
 
+        // Format 2 retains .ids high-water marks after image removal.
         // Nothing the documented commands built is left: the pool has no images and no temporary files.
-        var left = await world.Runtime.ExecAsync(world.EngineName, ["sh", "-c", "ls -A /pool/images; ls -A /pool/build; find /pool -name '*.bak'"], CancellationToken.None);
+        var left = await world.Runtime.ExecAsync(world.EngineName, ["sh", "-c", "find /pool/images -mindepth 1 -maxdepth 1 ! -name .ids -printf '%f\\n'; ls -A /pool/build; find /pool -name '*.bak'"], CancellationToken.None);
         Assert.Equal(string.Empty, left.StdOut.Trim());
     }
 }
