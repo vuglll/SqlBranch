@@ -48,6 +48,7 @@ public sealed class BranchResetter
         NameRules.ValidateBranch(name);
 
         await using var engine = await BranchEngine.OpenAsync(_runtime, _connector, _redactor, _engineName, pool, fallbackPort, cancellationToken).ConfigureAwait(false);
+        await engine.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
         await engine.TakeBranchLockAsync(name, cancellationToken).ConfigureAwait(false);
 
         // The guard: a branch SqlBranch created has a branch.json. Nothing else is ever dropped or changed.

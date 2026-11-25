@@ -11,6 +11,17 @@ public sealed partial class ImageImportTests
     }
 
     [Fact]
+    public async Task Import_during_an_unfinished_upgrade_is_refused_before_any_write()
+    {
+        Format2Pool.Apply(_world, SqlBranch.Core.Engine.UpgradeRecord.Running);
+        var error = await Assert.ThrowsAsync<SqlBranch.Core.SqlBranchException>(async () => await ImportAsync(await ValidAsync()));
+        Assert.Equal(SqlBranch.Core.Output.ErrorCodes.PoolUpgradeRequired, error.Code);
+        Assert.Contains("sqlbranch pool upgrade --yes", error.Message, StringComparison.Ordinal);
+        Assert.False(Ran("mkdir"));
+        Assert.False(Ran("base64 -d"));
+    }
+
+    [Fact]
     public async Task On_a_format_2_pool_an_import_publishes_a_local_version_id_after_the_manifest()
     {
         Format2Pool.Apply(_world);

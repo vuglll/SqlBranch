@@ -109,6 +109,7 @@ public sealed partial class BacpacBuilder(
         redactor.Register(password);
         var endpoint = EngineEndpoint.Loopback(port);
         await using var session = await connector.ConnectAsync(endpoint, password, token).ConfigureAwait(false);
+        await PoolUpgradeGuard.RequireWritableAsync(credentials, session, token).ConfigureAwait(false);
         var ownership = new BacpacOwnership(runtime, engine, session);
         await ownership.VerifyEngineAsync(token).ConfigureAwait(false);
 

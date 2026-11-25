@@ -126,6 +126,9 @@ public sealed class PoolUpgrader
         var found = await EnumerateAsync(cancellationToken).ConfigureAwait(false);
         await LockAsync(session, found, publishWait, progress, cancellationToken).ConfigureAwait(false);
 
+        // The upgrade and item locks protect cleanup from another upgrade or an existing writer.
+        await WriteAsync(UpgradeTemporaryFiles.CleanupScript(found.Images.Select(i => i.Name), found.Branches), "removing upgrade temporary files", cancellationToken).ConfigureAwait(false);
+
         // Step 3. Steps 3 and 4 process exactly the names locked above.
         var images = new List<UpgradedImage>();
         // Refresh metadata after writers finish, but never add newly published names to the locked set.

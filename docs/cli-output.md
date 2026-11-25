@@ -172,22 +172,24 @@ Mismatches: none
 ```
 
 Upgrade not finished. The credentials say `running` and nobody holds the lock, or a temporary credentials file is left.
+The temporary files are named by full path. The catalog, version-ID and branch-record temporary files are listed only while the
+credentials say `running`, because ordinary writers use the same names.
 `status` exits 1 `mismatch` and names the rerun:
 
 ```text
 Pool format: 2
 Mismatches: 2
   pool upgrade: The pool upgrade did not finish. Commands that change images or branches are refused until it finishes. Run 'sqlbranch pool upgrade --yes' to finish it.
-  credentials.json.new: The temporary file /pool/engine/credentials.json.new was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it.
+  /pool/engine/credentials.json.new: The temporary file /pool/engine/credentials.json.new was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it.
 ```
 
 ```json
 { "schemaVersion": 1, "command": "status", "ok": false, "poolFormat": 2,
   "mismatches": [
     { "kind": "pool_upgrade", "name": "pool upgrade", "message": "The pool upgrade did not finish. ..." },
-    { "kind": "upgrade_leftover", "name": "credentials.json.new", "message": "The temporary file ... was left by a pool upgrade that did not finish. ..." }
+    { "kind": "upgrade_leftover", "name": "/pool/engine/credentials.json.new", "message": "The temporary file ... was left by a pool upgrade that did not finish. ..." }
   ],
-  "error": { "code": "mismatch", "message": "status found 2 mismatches: pool upgrade (pool_upgrade); credentials.json.new (upgrade_leftover)" } }
+  "error": { "code": "mismatch", "message": "status found 2 mismatches: pool upgrade (pool_upgrade); /pool/engine/credentials.json.new (upgrade_leftover)" } }
 ```
 
 On a format-2 pool, an image whose `catalog.json` cannot be parsed is a mismatch of kind `image_catalog`, named by the image,

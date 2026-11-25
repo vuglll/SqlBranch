@@ -270,3 +270,22 @@ by an import built before the branch was created, the upgrade pins that branch
 to the imported version. This is also what a 0.2.2 reset would have restored.
 A branch older than the current image gets an unknown base; a branch whose
 image is gone gets a removed base. Neither can be reset to the current image.
+
+An upgrade that times out or is interrupted blocks commands that change images or
+branches with exit 3, `pool_upgrade_required`, until you rerun
+`sqlbranch pool upgrade --yes`. The rerun resumes from the recorded start time,
+keeps the version IDs already assigned, and removes only the upgrade's fixed
+temporary files: `engine/credentials.json.new`, `images/<name>/catalog.json.new`,
+`images/.ids/<name>.new`, and `branches/<name>/branch.json.new`. If the pool fills,
+free space and rerun the same command.
+
+`status` tests the upgrade lock without taking it. While the lock is held it shows
+“pool upgrade is running” and temporary files as in progress (exit 0). After the
+upgrade process dies, it reports the unfinished upgrade and each temporary file
+by name as mismatches (exit 1), with `sqlbranch pool upgrade --yes` as the fix.
+Image list and export, branch list and conn, and status remain available.
+If the upgrade reports an unreadable catalog, `sqlbranch image rm <name>` is
+allowed to remove that image during the unfinished upgrade; use `--force` if it
+has branches. Then rerun the upgrade. `teardown --force` also works during an
+unfinished upgrade and on format 2, removing the temporary files and `.ids`
+along with the rest of SqlBranch's pool contents.

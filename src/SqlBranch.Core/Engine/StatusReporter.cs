@@ -68,7 +68,7 @@ public sealed class StatusReporter
         "record=; [ $b = 1 ] && record=$(base64 -w0 \"${d}branch.json\"); echo \"SQLBRANCH_BRANCH|$(basename \"$d\")|$b|$x|$record\"; done; " +
         "for d in /pool/images/*/; do [ -d \"$d\" ] || continue; [ -f \"${d}manifest.json\" ] && echo \"SQLBRANCH_IMAGE|$(basename \"$d\")\"; done; " +
         "for d in /pool/images/.removing-*/; do [ -d \"$d\" ] || continue; echo \"SQLBRANCH_REMOVING|$(basename \"$d\")\"; done; " +
-        "[ -e /pool/engine/credentials.json.new ] && echo \"SQLBRANCH_UPGRADETEMP|credentials.json.new\"; " +
+        UpgradeTemporaryFiles.ListingScript +
         "for d in /pool/build/*/; do [ -d \"$d\" ] || continue; echo \"SQLBRANCH_BUILD|$(basename \"$d\")\"; done; " +
         BuildCredentials.ListMarkersLoop + "; " +
         "echo \"SQLBRANCH_SPACE|$(df -B1 --output=size,used,avail /pool | tail -n 1)\"";
@@ -147,7 +147,8 @@ public sealed class StatusReporter
         IEngineSession session, CredentialsFile credentials, Listing listing, List<StatusMismatch> mismatches, List<string> inProgress, CancellationToken cancellationToken)
     {
         var unfinished = credentials.Format >= 2 && credentials.Upgrade?.State == UpgradeRecord.Running;
-        if (!unfinished && listing.UpgradeTemporaryFiles.Count == 0)
+        var files = listing.UpgradeTemporaryFiles.Where(f => UpgradeTemporaryFiles.IsUpgradeFile(f, unfinished)).ToArray();
+        if (!unfinished && files.Length == 0)
         {
             return;
         }
@@ -155,7 +156,7 @@ public sealed class StatusReporter
         if (await EngineLocks.IsHeldWithoutTakingAsync(session, EngineLocks.PoolUpgrade, cancellationToken).ConfigureAwait(false))
         {
             inProgress.Add("pool upgrade is running");
-            inProgress.AddRange(listing.UpgradeTemporaryFiles.Select(f => $"pool upgrade temporary file {EngineCredentials.Directory}/{f}"));
+            inProgress.AddRange(files.Select(f => $"pool upgrade temporary file {f}"));
             return;
         }
 
@@ -165,10 +166,10 @@ public sealed class StatusReporter
                 "The pool upgrade did not finish. Commands that change images or branches are refused until it finishes. Run 'sqlbranch pool upgrade --yes' to finish it."));
         }
 
-        foreach (var file in listing.UpgradeTemporaryFiles)
+        foreach (var file in files)
         {
             mismatches.Add(new StatusMismatch("upgrade_leftover", file,
-                $"The temporary file {EngineCredentials.Directory}/{file} was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it."));
+                $"The temporary file {file} was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it."));
         }
     }
 

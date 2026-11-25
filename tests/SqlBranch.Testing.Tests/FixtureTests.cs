@@ -247,6 +247,63 @@ public sealed class FixtureTests : IDisposable
         Assert.DoesNotContain(_log, message => message.Contains(Password, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Unfinished_pool_upgrade_refuses_create_without_creating_a_fixture()
+    {
+        _engine.CredentialsJson = Format2Pool.Credentials(SqlBranch.Core.Engine.UpgradeRecord.Running);
+        var error = await Assert.ThrowsAsync<SqlBranchUnavailableException>(() => Create());
+        Assert.Equal("sqlbranch pool upgrade --yes", error.FixCommand);
+        Assert.Contains("did not finish", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(_connector.Statements, s => s.Contains("CREATE DATABASE", StringComparison.Ordinal));
+        Assert.DoesNotContain(_runtime.Calls, s => s.StartsWith("copy", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Availability_during_an_unfinished_upgrade_logs_the_fix_and_recovers_after_completion()
+    {
+        _engine.CredentialsJson = Format2Pool.Credentials(SqlBranch.Core.Engine.UpgradeRecord.Running);
+        Assert.False(await Host().IsAvailableAsync(default));
+        Assert.Contains(_log, s => s.Contains("sqlbranch pool upgrade --yes", StringComparison.Ordinal));
+        _engine.CredentialsJson = Format2Pool.Credentials();
+        Assert.True(await Host().IsAvailableAsync(default));
+    }
+
+    [Fact]
+    public async Task Reset_and_dispose_during_an_unfinished_upgrade_leave_the_branch()
+    {
+        const string mode = "thin";
+        _engine.EngineProbe = mode;
+        var db = await Create();
+        var record = new BranchRecord("shop", mode, DateTimeOffset.UnixEpoch, new Dictionary<string, string>());
+        _connector.Databases[db.Name] = [$"/pool/branches/{db.Name}/data/shop.mdf"];
+        _engine.BranchFolders.Add((db.Name, true, false));
+        _engine.BranchRecords[db.Name] = Encode(record.ToJson());
+        _engine.CredentialsJson = Format2Pool.Credentials(SqlBranch.Core.Engine.UpgradeRecord.Running);
+        _connector.Statements.Clear();
+        var scripts = new List<string>();
+        var previous = _runtime.ExecHandler;
+        _runtime.ExecHandler = (name, args) => { scripts.Add(args[^1]); return previous(name, args); };
+
+        var error = await Assert.ThrowsAsync<SqlBranchUnavailableException>(() => db.ResetAsync());
+        Assert.Contains("did not finish", error.Message, StringComparison.Ordinal);
+        Assert.Equal("sqlbranch pool upgrade --yes", error.FixCommand);
+        await db.DisposeAsync();
+
+        Assert.Contains(db.Name, _connector.Databases.Keys);
+        Assert.Equal(Encode(record.ToJson()), _engine.BranchRecords[db.Name]);
+        Assert.DoesNotContain(_connector.Statements, s => s.Contains("DROP DATABASE", StringComparison.Ordinal) || s.Contains("SINGLE_USER", StringComparison.Ordinal));
+        Assert.DoesNotContain(scripts, s => s.Contains("rm -", StringComparison.Ordinal) || s.Contains("base64 -d", StringComparison.Ordinal));
+        Assert.Contains(_log, s => s.Contains(db.Name, StringComparison.Ordinal) && s.Contains("sqlbranch pool upgrade --yes", StringComparison.Ordinal) && s.Contains("after it expires", StringComparison.Ordinal));
+        Assert.DoesNotContain(Password, error.Message + string.Join(' ', _log), StringComparison.Ordinal);
+    }
+
+    private static class Format2Pool
+    {
+        public static string Credentials(string? state = SqlBranch.Core.Engine.UpgradeRecord.Done) =>
+            SqlBranch.Core.Engine.CredentialsFile.Format2(Password, state is null ? null
+                : new SqlBranch.Core.Engine.UpgradeRecord(new DateTimeOffset(2026, 12, 1, 9, 0, 0, TimeSpan.Zero), state)).ToJson();
+    }
+
     public void Dispose()
     {
         SqlBranchEnvironment.Log = _oldLog;

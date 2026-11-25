@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using SqlBranch.Core.Containers;
 using SqlBranch.Core.Branches;
 using SqlBranch.Core.Pools;
+using SqlBranch.Core.Engine;
+using SqlBranch.Core.Images;
 
 namespace SqlBranch.Core.Tests.Fakes;
 
@@ -31,10 +33,53 @@ internal sealed partial class UpgradeWorld
             if (script == PoolUpgrader.EnumerationScript)
             {
                 Writes.Add("enumerate");
+                AfterStep?.Invoke("enumerate");
                 var lines = Images.Values.Where(i => !i.Name.StartsWith('.') && !i.Name.Contains('/') && (i.HasManifest || i.CatalogBase64 is not null)).OrderBy(i => i.Name, StringComparer.Ordinal).Select(i =>
                         $"SQLBRANCH_UPIMAGE|{i.Name}|{(i.HasManifest ? 1 : 0)}|{i.CatalogBase64 ?? "none"}|{i.IdFile ?? "none"}")
                     .Concat(Branches.Where(b => !b.StartsWith('.')).Order(StringComparer.Ordinal).Select(b => $"SQLBRANCH_UPBRANCH|{b}"));
                 return FakeContainerRuntime.Ok(string.Join('\n', lines) + "\n");
+            }
+
+            if (script == ImageCatalog.ListingScript)
+            {
+                var lines = Images.Values.SelectMany(i =>
+                    new[] { $"SQLBRANCH_IMAGE|{i.Name}|{Manifest(i)}", i.CatalogBase64 is null ? "" : $"SQLBRANCH_CATALOG|{i.Name}|{i.CatalogBase64}" })
+                    .Concat(Records.Select(b => $"SQLBRANCH_BRANCHJSON|{b.Key}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(b.Value))}"));
+                return FakeContainerRuntime.Ok(string.Join('\n', lines));
+            }
+            if (script.Contains("mv -T", StringComparison.Ordinal) && script.Contains("/pool/images/", StringComparison.Ordinal))
+            {
+                var name = Regex.Match(script, @"mv -T '/pool/images/([^/']+)'").Groups[1].Value;
+                Images.Remove(name);
+                return FakeContainerRuntime.Ok("SQLBRANCH_RENAMED=yes");
+            }
+            if (script == BranchLister.ListingScript)
+            {
+                return FakeContainerRuntime.Ok(string.Join('\n', Records.Select(b =>
+                    $"SQLBRANCH_BR|{b.Key}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(b.Value))}|0")));
+            }
+
+            if (script.StartsWith(UpgradeTemporaryFiles.CleanupPrefix, StringComparison.Ordinal))
+            {
+                // Only the exact paths the script names are removed, like the real shell.
+                foreach (var path in TemporaryFiles.Keys.Where(p => script.Contains("'" + p + "'", StringComparison.Ordinal)).ToArray())
+                {
+                    TemporaryFiles.Remove(path);
+                    DeletedFiles.Add(path);
+                }
+                AfterStep?.Invoke("cleanup");
+                return FakeContainerRuntime.Ok();
+            }
+
+            if (script.Contains("SQLBRANCH_FREE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_FREE=" + (100L << 30));
+            }
+
+            if (script == StatusReporter.ListingScript)
+            {
+                var result = inner(container, command);
+                return result with { StdOut = result.StdOut + "\n" + string.Join('\n', TemporaryFiles.Keys.Select(p => "SQLBRANCH_UPGRADETEMP|" + p)) };
             }
 
             if (script.Contains("SQLBRANCH_RECORD=", StringComparison.Ordinal))
@@ -50,11 +95,7 @@ internal sealed partial class UpgradeWorld
                 {
                     return FakeContainerRuntime.Ok("SQLBRANCH_MANIFEST=none");
                 }
-                var manifest = Convert.ToBase64String(Encoding.UTF8.GetBytes(new SqlBranch.Core.Images.ImageManifest(
-                    SqlBranch.Core.Images.ImageManifest.CurrentFormat, "shop", "Shop", "16.0.4125.3",
-                    [new SqlBranch.Core.Images.ImageFile("Shop", "Shop.mdf", "data", 8L << 20), new SqlBranch.Core.Images.ImageFile("Shop_log", "Shop_log.ldf", "log", 524_288)],
-                    "FULL", "SIMPLE", 268_435_456, LogRebuilt: true, image.BuiltAt,
-                    "shop.bak", new string('a', 64), new Dictionary<string, string>(), CliWorld.EngineImage).ToJson()));
+                var manifest = Manifest(image);
                 return FakeContainerRuntime.Ok("SQLBRANCH_MANIFEST=" + manifest);
             }
 
@@ -69,14 +110,17 @@ internal sealed partial class UpgradeWorld
 
                 if (id.Success)
                 {
-                    Images[id.Groups["n"].Value] = Images[id.Groups["n"].Value] with { IdFile = id.Groups["id"].Value };
+                    var name = id.Groups["n"].Value;
+                    Atomic("id:" + name, ImageVersions.IdFile(name), id.Groups["id"].Value,
+                        () => Images[name] = Images[name] with { IdFile = id.Groups["id"].Value });
                     Writes.Add("ids:" + id.Groups["n"].Value);
                 }
 
                 if (catalog.Success)
                 {
                     var name = catalog.Groups["n"].Value;
-                    Images[name] = Images[name] with { CatalogBase64 = catalog.Groups["b64"].Value };
+                    Atomic("catalog:" + name, ImagePaths.Image(name) + "/catalog.json", catalog.Groups["b64"].Value,
+                        () => Images[name] = Images[name] with { CatalogBase64 = catalog.Groups["b64"].Value });
                     Writes.Add("catalog:" + name);
                 }
 
@@ -93,7 +137,8 @@ internal sealed partial class UpgradeWorld
                         return FakeContainerRuntime.Fail(1, error);
                     }
                     var name = match.Groups["n"].Value;
-                    Records[name] = Encoding.UTF8.GetString(Convert.FromBase64String(match.Groups["b64"].Value));
+                    var json = Encoding.UTF8.GetString(Convert.FromBase64String(match.Groups["b64"].Value));
+                    Atomic("branch:" + name, BranchPaths.Json(name), json, () => Records[name] = json);
                     Writes.Add("branch:" + name);
                     return FakeContainerRuntime.Ok();
                 }
@@ -119,16 +164,63 @@ internal sealed partial class UpgradeWorld
                 }
             }
 
-            var result = run(spec);
-            if (spec.Stdin is { } json && FakeContainerRuntime.ScriptOf(spec).Contains("credentials.json.new", StringComparison.Ordinal))
+            if (spec.Stdin is { } json && credentialsWrite && AfterStep is not null)
             {
+                var state = json.Contains("\"state\":\"done\"", StringComparison.Ordinal) ? "done" : "running";
+                var path = EngineCredentials.Path + ".new";
+                if (TemporaryFiles.Remove(path))
+                {
+                    // The credentials write itself deletes a leftover first (D2): "rm -f" before the write.
+                    DeletedFiles.Add(path);
+                }
+                TemporaryFiles[path] = json;
+                foreach (var step in new[] { "write", "chown", "chmod", "sync" })
+                {
+                    AfterStep.Invoke("credentials:" + state + ":" + step);
+                }
+                var written = run(spec);
+                TemporaryFiles.Remove(path);
+                AfterStep.Invoke("credentials:" + state + ":rename");
+                AfterStep.Invoke("credentials:" + state + ":directory-sync");
+                Writes.Add("credentials:" + state);
+                return written;
+            }
+            if (credentialsWrite && TemporaryFiles.Remove(EngineCredentials.Path + ".new"))
+            {
+                DeletedFiles.Add(EngineCredentials.Path + ".new");
+            }
+            var result = run(spec);
+            if (spec.Stdin is { } content && FakeContainerRuntime.ScriptOf(spec).Contains("credentials.json.new", StringComparison.Ordinal))
+            {
+                TemporaryFiles.Remove(EngineCredentials.Path + ".new");
                 Writes.Add(result.Succeeded
-                    ? "credentials:" + (json.Contains("\"state\":\"done\"", StringComparison.Ordinal) ? "done" : "running")
+                    ? "credentials:" + (content.Contains("\"state\":\"done\"", StringComparison.Ordinal) ? "done" : "running")
                     : "credentials:failed");
             }
 
             return result;
         };
+    }
+
+    private static string Manifest(FakeImage image) => Convert.ToBase64String(Encoding.UTF8.GetBytes(new ImageManifest(
+        ImageManifest.CurrentFormat, image.Name, "Shop", "16.0.4125.3",
+        [new ImageFile("Shop", "Shop.mdf", "data", 8L << 20), new ImageFile("Shop_log", "Shop_log.ldf", "log", 524_288)],
+        "FULL", "SIMPLE", 268_435_456, LogRebuilt: true, image.BuiltAt,
+        "shop.bak", new string('a', 64), new Dictionary<string, string>(), CliWorld.EngineImage).ToJson()));
+
+    public Action<string>? AfterStep { get; set; }
+    public Dictionary<string, string> TemporaryFiles { get; } = [];
+    public List<string> DeletedFiles { get; } = [];
+
+    private void Atomic(string label, string target, string content, Action commit)
+    {
+        TemporaryFiles[target + ".new"] = content;
+        AfterStep?.Invoke(label + ":write");
+        AfterStep?.Invoke(label + ":sync");
+        commit();
+        TemporaryFiles.Remove(target + ".new");
+        AfterStep?.Invoke(label + ":rename");
+        AfterStep?.Invoke(label + ":directory-sync");
     }
 
     public CliWorld World { get; }

@@ -151,7 +151,7 @@ public sealed class PoolUpgradeBindingWaitTests
         Assert.Empty(Names(run.Json, "removedBase"));
         Assert.Contains("warning:", run.Err, StringComparison.Ordinal);
         Assert.Contains("SqlBranch.Testing 0.2.x", run.Err, StringComparison.Ordinal);
-        var script = Assert.Single(_pool.Scripts, s => s.Contains("branch.json.new", StringComparison.Ordinal));
+        var script = Assert.Single(_pool.Scripts, s => s.Contains("/pool/branches/dev1/branch.json.new", StringComparison.Ordinal) && !s.StartsWith(UpgradeTemporaryFiles.CleanupPrefix, StringComparison.Ordinal));
         Assert.Contains("&& sync '/pool/branches/dev1/branch.json.new' && mv -f", script, StringComparison.Ordinal);
         Assert.Contains("sync '/pool/branches/dev1'", script, StringComparison.Ordinal);
     }
@@ -243,7 +243,7 @@ public sealed class PoolUpgradeBindingWaitTests
             checks++;
             if (temporary)
             {
-                _pool.World.Host.UpgradeTemporaryFiles.Add("credentials.json.new");
+                _pool.World.Host.UpgradeTemporaryFiles.Add("/pool/engine/credentials.json.new");
             }
 
             var probesBefore = _pool.World.Connector.ProbedLocks.Count;

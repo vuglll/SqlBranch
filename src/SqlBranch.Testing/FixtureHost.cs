@@ -5,6 +5,7 @@ using SqlBranch.Core.Containers;
 using SqlBranch.Core.Engine;
 using SqlBranch.Core.Images;
 using SqlBranch.Core.Pools;
+using SqlBranch.Core.Output;
 using SqlBranch.Core.Secrets;
 
 namespace SqlBranch.Testing;
@@ -37,7 +38,13 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
         {
             var (pool, settings) = await DiscoverAsync(null, ct).ConfigureAwait(false);
             await using var engine = await BranchEngine.OpenAsync(runtime, connector, redactor, engineName, pool, settings.Port, ct).ConfigureAwait(false);
+            await engine.RequireWritableAsync(ct).ConfigureAwait(false);
             return true;
+        }
+        catch (SqlBranchException ex) when (ex.Code == ErrorCodes.PoolUpgradeRequired)
+        {
+            WriteLog(ex.Message);
+            return false;
         }
         catch (Exception) when (!ct.IsCancellationRequested) { return false; }
     }
@@ -103,6 +110,7 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
             {
                 "not_initialized" => "sqlbranch init",
                 "engine_stopped" => "sqlbranch engine start",
+                "pool_upgrade_required" => "sqlbranch pool upgrade --yes",
                 "image_not_found" when image is not null => $"sqlbranch image build {image}",
                 _ => null,
             };

@@ -34,6 +34,11 @@ internal sealed class BranchEngine : IAsyncDisposable
     /// <summary>The pool format read with the credentials: 1 or 2.</summary>
     public int PoolFormat { get; private init; } = 1;
 
+    private CredentialsFile Credentials { get; init; } = null!;
+
+    internal Task RequireWritableAsync(CancellationToken cancellationToken) =>
+        PoolUpgradeGuard.RequireWritableAsync(Credentials, Session, cancellationToken);
+
     public IContainerRuntime Runtime => _runtime;
 
     public string EngineName => _engineName;
@@ -64,7 +69,7 @@ internal sealed class BranchEngine : IAsyncDisposable
 
         var endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort));
         var session = await connector.ConnectAsync(endpoint, password, cancellationToken).ConfigureAwait(false);
-        return new BranchEngine(runtime, engineName, password, endpoint, session) { PoolFormat = credentials.Format };
+        return new BranchEngine(runtime, engineName, password, endpoint, session) { PoolFormat = credentials.Format, Credentials = credentials };
     }
 
     public ValueTask DisposeAsync() => Session.DisposeAsync();

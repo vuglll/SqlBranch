@@ -104,6 +104,7 @@ public sealed class BranchCreator
     internal async Task<BranchCreateResult> CreateAsync(BranchEngine engine, string name, string image,
         bool copy, bool requireThin, TimeSpan? timeLimit, IReadOnlyDictionary<string, string>? labels, CancellationToken cancellationToken)
     {
+        await engine.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
         var session = engine.Session;
         // Two creates of one name cannot both go on. The lock lasts as long as the session, so it is what
         // lets status tell a create that is running from one that died.

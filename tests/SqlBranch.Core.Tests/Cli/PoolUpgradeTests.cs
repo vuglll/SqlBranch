@@ -157,7 +157,7 @@ public sealed class PoolUpgradeTests
         Assert.Equal(1, JsonDocument.Parse(status.Out).RootElement.GetProperty("poolFormat").GetInt32());
         var create = _pool.Run("branch", "create", "dev5", "--from", "crm", "--format", "json");
         Assert.True(create.Exit == 0, create.Out + create.Err);
-        Assert.DoesNotContain(_pool.Scripts, s => s.Contains("catalog.json", StringComparison.Ordinal) || s.Contains(".ids", StringComparison.Ordinal));
+        Assert.DoesNotContain(_pool.Scripts, s => s.Contains("base64 -d", StringComparison.Ordinal) && (s.Contains("catalog.json", StringComparison.Ordinal) || s.Contains(".ids", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -173,6 +173,10 @@ public sealed class PoolUpgradeTests
         Assert.Equal(UpgradeRecord.Running, Credentials().Upgrade!.State);
         Assert.Equal(["credentials:running", "enumerate", "enumerate", "ids:crm", "catalog:crm"], _pool.Writes);
 
+        var unfinished = _pool.Run("status", "--format", "json");
+        Assert.Equal(1, unfinished.Exit);
+        Assert.Contains("did not finish", unfinished.Out, StringComparison.Ordinal);
+
         _pool.FailWrite = null;
         _clock.Now = Start.AddDays(3);
         var rerun = Json();
@@ -182,6 +186,9 @@ public sealed class PoolUpgradeTests
         Assert.Equal(1, rerun.Json.GetProperty("pool").GetProperty("previousFormat").GetInt32());
         Assert.Equal(UpgradeRecord.Done, Credentials().Upgrade!.State);
         Assert.Equal(Start, Credentials().Upgrade!.StartedAt);
+        var finished = _pool.Run("status", "--format", "json");
+        Assert.Equal(0, finished.Exit);
+        Assert.Equal(2, JsonDocument.Parse(finished.Out).RootElement.GetProperty("poolFormat").GetInt32());
     }
 
     [Fact]

@@ -7,6 +7,8 @@ namespace SqlBranch.Core.Tests.Cli;
 /// <summary>The pool format in <c>status</c>, and an upgrade that is running or did not finish (task 3.2).</summary>
 public sealed class StatusPoolFormatTests
 {
+    private const string TempCredentials = "/pool/engine/credentials.json.new";
+
     private readonly CliWorld _world = new();
 
     public StatusPoolFormatTests()
@@ -69,24 +71,53 @@ public sealed class StatusPoolFormatTests
     [Fact]
     public void A_temporary_credentials_file_with_the_lock_free_is_an_upgrade_leftover_shown_by_name_only()
     {
-        _world.Host.UpgradeTemporaryFiles.Add("credentials.json.new");
+        _world.Host.UpgradeTemporaryFiles.Add(TempCredentials);
 
         var run = Status();
 
         Assert.Equal(1, run.Exit);
         Assert.Equal(["upgrade_leftover"], Kinds(run.Json));
         var message = Messages(run.Json).Single();
-        Assert.Contains("credentials.json.new", message, StringComparison.Ordinal);
+        Assert.Contains(TempCredentials, message, StringComparison.Ordinal);
         Assert.Contains("sqlbranch pool upgrade --yes", message, StringComparison.Ordinal);
         Assert.DoesNotContain(CliWorld.StoredPassword, run.Out, StringComparison.Ordinal);
         Assert.Equal(1, run.Json.GetProperty("poolFormat").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Ordinary_writer_temporary_files_are_not_upgrade_leftovers_on_a_format_1_or_a_finished_format_2_pool(bool finished)
+    {
+        if (finished) { Format2Pool.Apply(_world, UpgradeRecord.Done); }
+        _world.Host.UpgradeTemporaryFiles.AddRange(
+            ["/pool/branches/dev1/branch.json.new", "/pool/images/shop/catalog.json.new", "/pool/images/.ids/shop.new"]);
+
+        var run = Status();
+
+        Assert.Equal(0, run.Exit);
+        Assert.Empty(Kinds(run.Json));
+        Assert.Empty(run.Json.GetProperty("inProgress").EnumerateArray());
+    }
+
+    [Fact]
+    public void While_the_fence_is_running_and_the_lock_is_free_every_listed_temporary_file_is_a_leftover_by_full_path()
+    {
+        Format2Pool.Apply(_world, UpgradeRecord.Running);
+        _world.Host.UpgradeTemporaryFiles.AddRange([TempCredentials, "/pool/branches/dev1/branch.json.new"]);
+
+        var run = Status();
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal(["pool_upgrade", "upgrade_leftover", "upgrade_leftover"], Kinds(run.Json));
+        Assert.Contains("/pool/branches/dev1/branch.json.new", run.Out, StringComparison.Ordinal);
     }
 
     [Fact]
     public void A_running_upgrade_is_in_progress_and_exits_0_also_with_its_temporary_file()
     {
         Format2Pool.Apply(_world, UpgradeRecord.Running);
-        _world.Host.UpgradeTemporaryFiles.Add("credentials.json.new");
+        _world.Host.UpgradeTemporaryFiles.Add(TempCredentials);
         _world.Connector.HeldLocks.Add(EngineLocks.PoolUpgrade);
 
         var run = Status();
@@ -95,7 +126,7 @@ public sealed class StatusPoolFormatTests
         Assert.Empty(Kinds(run.Json));
         Assert.Contains("pool upgrade is running", run.Json.GetProperty("inProgress").EnumerateArray().Select(e => e.GetString()), StringComparer.Ordinal);
         Assert.Contains("In progress: pool upgrade is running", _world.Run("status").Out, StringComparison.Ordinal);
-        var temp = $"pool upgrade temporary file {EngineCredentials.Directory}/credentials.json.new";
+        var temp = $"pool upgrade temporary file {TempCredentials}";
         Assert.Contains(temp, run.Json.GetProperty("inProgress").EnumerateArray().Select(e => e.GetString()), StringComparer.Ordinal);
         Assert.Contains(temp, _world.Run("status").Out, StringComparison.Ordinal);
     }
@@ -103,7 +134,7 @@ public sealed class StatusPoolFormatTests
     [Fact]
     public void A_running_upgrade_that_only_wrote_the_temporary_file_is_not_a_leftover()
     {
-        _world.Host.UpgradeTemporaryFiles.Add("credentials.json.new");
+        _world.Host.UpgradeTemporaryFiles.Add(TempCredentials);
         _world.Connector.HeldLocks.Add(EngineLocks.PoolUpgrade);
 
         var run = Status();
@@ -119,7 +150,7 @@ public sealed class StatusPoolFormatTests
         _world.Connector.TrackSessionLocks = true;
 
         Status();
-        _world.Host.UpgradeTemporaryFiles.Add("credentials.json.new");
+        _world.Host.UpgradeTemporaryFiles.Add(TempCredentials);
         Status();
 
         Assert.Contains(EngineLocks.PoolUpgrade, _world.Connector.ProbedLocks);

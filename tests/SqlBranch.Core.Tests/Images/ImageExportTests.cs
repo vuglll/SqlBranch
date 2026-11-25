@@ -58,6 +58,21 @@ public sealed class ImageExportTests : IDisposable
         _world.Runtime.StreamHandler = (_, _, _, token) => _tar(token);
     }
 
+    [Fact]
+    public async Task Image_export_during_an_unfinished_upgrade_keeps_working()
+    {
+        _credentialsJson = Format2Pool.Credentials(UpgradeRecord.Running);
+        _world.Host.CredentialsJson = _credentialsJson;
+        _catalogJson = Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"));
+        var result = await Export(Dest());
+        Assert.Equal(2, result.Files);
+        await using (var reader = await ImageArchiveReader.OpenAsync(new MemoryStream(await File.ReadAllBytesAsync(Dest())), CancellationToken.None))
+        {
+            Assert.Equal(_manifest.ToJson(), reader.Head.Manifest.ToJson());
+        }
+        Assert.Equal(_credentialsJson, _world.Host.CredentialsJson);
+    }
+
     public void Dispose()
     {
         try

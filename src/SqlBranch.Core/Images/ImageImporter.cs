@@ -170,6 +170,7 @@ public sealed class ImageImporter
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
+        await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
 
         // An import and a build or another import of one name cannot both go on. The lock lasts as long as the session.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(targetName), cancellationToken).ConfigureAwait(false))

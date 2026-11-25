@@ -15,6 +15,10 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
     public async Task<PruneResult> PruneAsync(FoundPool pool, int fallbackPort, CancellationToken cancellationToken,
         string? owner = null)
     {
+        await using (var guard = await BranchEngine.OpenAsync(runtime, connector, redactor, engineName, pool, fallbackPort, cancellationToken).ConfigureAwait(false))
+        {
+            await guard.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
+        }
         var time = clock ?? TimeProvider.System;
         var lister = new BranchLister(runtime, connector, redactor, engineName, time);
         KeyValuePair<string, string>[] filters = owner is null ? [] : [new("sqlbranch.owner", owner)];

@@ -78,3 +78,15 @@ The runnable projects are under `samples/Xunit`, `samples/NUnit` and `samples/MS
 Set `SqlBranchEnvironment.MaxConcurrentBranches` once in test-runner setup to cap the number of live fixture branches in that process. The default is unlimited. Creates above the limit wait for disposal and honor their cancellation token. Each test-runner process has its own limit.
 
 On 2026-11-18 a Mac with 16 GiB of physical RAM and 7.75 GiB available to Docker Desktop sustained **20 live fixture branches** in both thin and copy modes. Each branch opened a connection and queried the same 100-row image. This is a measured working point for a small image. Larger images, heavier queries and multiple test-runner processes can use substantially more resources. On 2026-11-20, on native x86-64 Linux with the engine container capped at 16 GB (`docker update --memory 16g --memory-swap 16g`; not Docker Desktop), **400 branches** were created at once from a 100-row image, all 400 answered a query at the same time, and the engine used 3.4 GiB. No limit was reached. Creates run about one at a time (about 0.5 s each, 217 s for 400), so with many branches the wait for creation, not memory, sets the practical number. Details: [docs/research/2026-11-20-x86-64-release-gate-run.md](research/2026-11-20-x86-64-release-gate-run.md).
+
+During an unfinished pool upgrade, fixture create and reset throw with
+“The pool upgrade did not finish” and name `sqlbranch pool upgrade --yes` as the
+fix. If the upgrade lock is still held, the message says an upgrade is running.
+Reset leaves the branch and its data unchanged. The availability check returns
+false and writes a library log line naming the same command; it returns true
+again after the upgrade finishes and the engine is reachable.
+
+Fixture disposal does not throw during an unfinished upgrade. It leaves the
+branch and logs `sqlbranch pool upgrade --yes`, with instructions to run
+`sqlbranch branch prune` after the branch expires. Finish the upgrade before
+pruning expired fixtures.

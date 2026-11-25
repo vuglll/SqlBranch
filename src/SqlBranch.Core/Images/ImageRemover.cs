@@ -58,6 +58,16 @@ public sealed class ImageRemover
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
 
+        // D13 permits removing an unreadable catalog to unblock the upgrade's own repair path.
+        if (credentials.Upgrade is { State: UpgradeRecord.Running })
+        {
+            var before = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
+            if (before.Images.FirstOrDefault(i => i.Name == name)?.CatalogReadable != false)
+            {
+                await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         // The same lock a build of this name holds, so a removal and a build of one name cannot overlap.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false))
         {
