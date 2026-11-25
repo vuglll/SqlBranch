@@ -41,7 +41,7 @@ public sealed class PoolUpgrader
     private const string BranchTag = "SQLBRANCH_UPBRANCH|";
 
     /// <summary>
-    /// The existing images (a manifest or a catalog) and branches (a <c>branch.json</c>), one tagged line each. The globs skip
+    /// The existing images (a manifest or a catalog) and branch folders (with or without a <c>branch.json</c>: a create still running has made the folder and writes the record late), one tagged line each. The globs skip
     /// folders that start with a dot (<c>.removing-*</c>, <c>.ids</c>), and an image folder a build is still sealing has no
     /// manifest yet, so it is skipped too, as the 0.2.2 image listing does. An image line carries whether the manifest
     /// exists, the catalog as base64 (or <c>none</c>) and the high-water mark file (or <c>none</c>).
@@ -52,26 +52,29 @@ public sealed class PoolUpgrader
         "if [ $m = 0 ] && [ \"$c\" = none ]; then continue; fi; " +
         "i=none; if [ -f \"/pool/images/.ids/$n\" ]; then i=$(cat \"/pool/images/.ids/$n\"); fi; " +
         "echo \"SQLBRANCH_UPIMAGE|$n|$m|$c|$i\"; done; " +
-        "for d in /pool/branches/*/; do [ -f \"${d}branch.json\" ] && echo \"SQLBRANCH_UPBRANCH|$(basename \"$d\")\"; done; true";
+        "for d in /pool/branches/*/; do [ -d \"$d\" ] && echo \"SQLBRANCH_UPBRANCH|$(basename \"$d\")\"; done; true";
 
     private readonly IContainerRuntime _runtime;
     private readonly IEngineConnector _connector;
     private readonly SecretRedactor _redactor;
     private readonly string _engineName;
     private readonly TimeProvider _clock;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     public PoolUpgrader(
         IContainerRuntime runtime,
         IEngineConnector connector,
         SecretRedactor redactor,
         string engineName = ContainerLabels.EngineName,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
         _engineName = engineName;
         _clock = clock ?? TimeProvider.System;
+        _delay = delay ?? ((duration, token) => Task.Delay(duration, _clock, token));
     }
 
     /// <summary>The existing images and branches found in step 2.</summary>
@@ -82,9 +85,9 @@ public sealed class PoolUpgrader
 
     /// <summary>
     /// Upgrades the pool, or finishes an upgrade that did not finish. <paramref name="progress"/> gets one line at a time for
-    /// standard error: the warning first, then (from task 4.4) the wait. The engine must be running; the caller has checked that.
+    /// standard error: the warning first, then progress while waiting for locks. The engine must be running; the caller has checked that.
     /// </summary>
-    public async Task<PoolUpgradeResult> UpgradeAsync(FoundPool pool, int fallbackPort, Action<string>? progress, CancellationToken cancellationToken)
+    public async Task<PoolUpgradeResult> UpgradeAsync(FoundPool pool, int fallbackPort, Action<string>? progress, TimeSpan publishWait, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pool);
         var image = ImageCatalog.RequireRunningEngine(pool).Image;
@@ -119,13 +122,15 @@ public sealed class PoolUpgrader
                 CredentialsFile.Format2(credentials.Password, new UpgradeRecord(startedAt, UpgradeRecord.Running)), cancellationToken).ConfigureAwait(false);
         }
 
-        // Step 2. Find the existing names and lock each of them. Task 4.4 turns the single attempt into the wait.
+        // Step 2. Freeze the names before waiting; retain acquired locks until the session closes.
         var found = await EnumerateAsync(cancellationToken).ConfigureAwait(false);
-        await LockAsync(session, found, cancellationToken).ConfigureAwait(false);
+        await LockAsync(session, found, publishWait, progress, cancellationToken).ConfigureAwait(false);
 
         // Step 3. Steps 3 and 4 process exactly the names locked above.
         var images = new List<UpgradedImage>();
-        foreach (var existing in found.Images)
+        // Refresh metadata after writers finish, but never add newly published names to the locked set.
+        var refreshed = await EnumerateAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var existing in refreshed.Images.Where(i => found.Images.Any(locked => locked.Name == i.Name)))
         {
             if (await WriteCatalogAsync(existing, startedAt, cancellationToken).ConfigureAwait(false) is { } version)
             {
@@ -133,8 +138,8 @@ public sealed class PoolUpgrader
             }
         }
 
-        // Step 4. Task 4.3 binds each locked branch to its base here.
-        var branches = UpgradedBranches.None;
+        // Step 4. Read and bind only the locked branch records.
+        var branches = await BindBranchesAsync(engine, found.Branches, images, progress, cancellationToken).ConfigureAwait(false);
 
         // Step 5.
         await EngineCredentials.WriteFileAsync(_runtime, image, pool.Location,
@@ -170,36 +175,95 @@ public sealed class PoolUpgrader
         return new Found([.. images.Values], [.. branches]);
     }
 
-    /// <summary>
-    /// Takes the exclusive lock of every existing image and branch without waiting, and keeps it on the session. A name whose
-    /// lock is busy fails the command with <c>catalog_busy</c> naming every busy name; the fence is already in place, so the
-    /// message names the rerun. The wait until <c>publishWait</c> (task 4.4) replaces the single attempt here.
-    /// </summary>
-    private static async Task LockAsync(IEngineSession session, Found found, CancellationToken cancellationToken)
+    private async Task LockAsync(IEngineSession session, Found found, TimeSpan wait, Action<string>? progress, CancellationToken cancellationToken)
     {
-        var busy = new List<string>();
-        foreach (var image in found.Images)
+        var pending = found.Images.Select(i => (Resource: EngineLocks.Image(i.Name), Label: $"image '{i.Name}'"))
+            .Concat(found.Branches.Select(b => (Resource: EngineLocks.Branch(b), Label: $"branch '{b}'"))).ToList();
+        var start = _clock.GetTimestamp();
+        string? lastBusy = null;
+        var lastPrinted = start;
+        while (true)
         {
-            if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(image.Name), cancellationToken).ConfigureAwait(false))
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var item in pending.ToArray())
             {
-                busy.Add($"image '{image.Name}'");
+                if (await EngineLocks.TryTakeAsync(session, item.Resource, cancellationToken).ConfigureAwait(false))
+                {
+                    pending.Remove(item);
+                }
             }
+
+            if (pending.Count == 0)
+            {
+                return;
+            }
+
+            var busy = string.Join(", ", pending.Select(i => i.Label));
+            var remaining = wait - _clock.GetElapsedTime(start);
+            if (remaining <= TimeSpan.Zero)
+            {
+                throw new SqlBranchException(ErrorCodes.CatalogBusy,
+                    $"The pool upgrade could not lock {busy}: commands are still working on them. " +
+                    "Commands that change images or branches are refused until the upgrade finishes. Run 'sqlbranch pool upgrade --yes' again once they finish.");
+            }
+
+            if (busy != lastBusy || _clock.GetElapsedTime(lastPrinted) >= TimeSpan.FromSeconds(30))
+            {
+                progress?.Invoke($"Waiting for {busy} before upgrading the pool.");
+                lastBusy = busy;
+                lastPrinted = _clock.GetTimestamp();
+            }
+
+            await _delay(remaining < TimeSpan.FromSeconds(1) ? remaining : TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<UpgradedBranches> BindBranchesAsync(BranchEngine engine, IReadOnlyList<string> names,
+        IReadOnlyList<UpgradedImage> images, Action<string>? progress, CancellationToken cancellationToken)
+    {
+        var pinned = new List<string>();
+        var unknown = new List<string>();
+        var removed = new List<string>();
+        foreach (var name in names)
+        {
+            var (exists, record) = await engine.ReadRecordAsync(name, cancellationToken).ConfigureAwait(false);
+            // A removal that finished during the wait must not be resurrected.
+            if (!exists)
+            {
+                continue;
+            }
+
+            // An unreadable record is left as it is (design D14): writing a base into it could destroy what is left of it.
+            if (record is null || NameRules.Problem(record.Image, forBranch: false) is not null)
+            {
+                progress?.Invoke($"warning: The record of branch '{name}' ({BranchPaths.Json(name)}) cannot be read, so the upgrade left it as it is. " +
+                    $"Run 'sqlbranch branch rm {name}' to remove the branch.");
+                continue;
+            }
+
+            if (record.BaseKnown is null)
+            {
+                var image = images.FirstOrDefault(i => i.Name == record.Image);
+                if (image is null)
+                {
+                    record = record with { BaseKnown = true, ImageVersion = null };
+                }
+                else
+                {
+                    var manifest = await engine.ReadManifestAsync(record.Image,
+                        $"The image '{record.Image}' disappeared during the upgrade.", cancellationToken).ConfigureAwait(false);
+                    var known = record.CreatedAt >= manifest.BuiltAt;
+                    record = record with { BaseKnown = known, ImageVersion = known ? image.Version : null };
+                }
+
+                await WriteAsync($"{BranchEngine.RecordWriteScript(name, record)} && {{ sync {Quoting.Shell(BranchPaths.Branch(name))} || true; }}",
+                    $"writing the base of branch '{name}'", cancellationToken).ConfigureAwait(false);
+            }
+
+            (record.BaseKnown == false ? unknown : record.ImageVersion is null ? removed : pinned).Add(name);
         }
 
-        foreach (var branch in found.Branches)
-        {
-            if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Branch(branch), cancellationToken).ConfigureAwait(false))
-            {
-                busy.Add($"branch '{branch}'");
-            }
-        }
-
-        if (busy.Count > 0)
-        {
-            throw new SqlBranchException(ErrorCodes.CatalogBusy,
-                $"The pool upgrade could not lock {string.Join(", ", busy)}: a command is still working on {(busy.Count == 1 ? "it" : "them")}. " +
-                "Commands that change images or branches are refused until the upgrade finishes. Run 'sqlbranch pool upgrade --yes' again once they finish.");
-        }
+        return new UpgradedBranches(pinned, unknown, removed);
     }
 
     /// <summary>

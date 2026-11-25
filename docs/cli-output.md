@@ -284,15 +284,14 @@ the 0.2.2 text.
 
 `sqlbranch pool upgrade --yes` moves a format-1 pool to format 2. `pool` is the new format and `previousFormat` the one
 before (2 when the pool was already upgraded, then nothing else changes and `images` is `[]`); `images` lists each image the
-upgrade processed with its first version ID, by name; `branches` names the branches by the base they got and is the three
-empty lists until the upgrade binds branches (a later task of this change).
+upgrade processed with its first version ID, by name; `branches` names the branches by the base they got in three lists: `pinned`, `unknownBase` and `removedBase`. A completed rerun reports empty lists.
 
 ```json
 { "schemaVersion": 1, "command": "pool upgrade", "ok": true,
   "pool": { "format": 2, "previousFormat": 1 },
   "images": [ { "name": "crm", "version": "crm@20261201T090000000Z" },
               { "name": "shop", "version": "shop@20261201T090000000Z" } ],
-  "branches": { "pinned": [], "unknownBase": [], "removedBase": [] } }
+  "branches": { "pinned": ["dev1"], "unknownBase": ["old1"], "removedBase": ["pr-9"] } }
 ```
 
 ```json
@@ -308,6 +307,9 @@ already format 2. The text output of the first run:
 The pool now uses format 2 (it used format 1).
 Image crm: version crm@20261201T090000000Z
 Image shop: version shop@20261201T090000000Z
+Branches pinned to the first version: dev1
+Branches with an unknown base (they cannot be reset): old1
+Branches whose image was already removed (they cannot be reset): pr-9
 ```
 
 and of the rerun: `The pool already uses format 2. Nothing was changed.` In text and in JSON format, an upgrade that is going to
@@ -316,6 +318,14 @@ write prints one line on standard error before its first write:
 ```
 warning: The pool upgrade cannot be undone. SqlBranch 0.2.x tools and SqlBranch.Testing 0.2.x packages can no longer use the pool after it.
 ```
+
+While locks are busy, progress goes to standard error, for example:
+
+```text
+Waiting for image 'shop', branch 'dev4' before upgrading the pool.
+```
+
+The wait is bounded by `publishWait`; a timeout names every still-busy image and branch and asks for `sqlbranch pool upgrade --yes` again.
 
 The command exits 2 `usage_error` before any Docker command when `--yes` is missing, repeated or given a value, or when an
 operand or another option is given; 3 `not_initialized` or `engine_stopped` when there is no running engine; 1

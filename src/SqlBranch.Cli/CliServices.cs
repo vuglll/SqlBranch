@@ -32,7 +32,8 @@ internal sealed record CliServices(
     Func<string, string>? RealPath = null,
     Func<BackupUrl, StorageSecrets, SecretRedactor, IArchiveStore>? StoreFactory = null,
     IProcessRunner? SqlPackageProcess = null,
-    IBacpacReadSource? BacpacReadSource = null)
+    IBacpacReadSource? BacpacReadSource = null,
+    Func<TimeSpan, CancellationToken, Task>? UpgradeDelay = null)
 {
     /// <summary>The real thing: <c>docker</c>, SqlClient and the process's own environment.</summary>
     public static CliServices Real(SecretRedactor redactor)

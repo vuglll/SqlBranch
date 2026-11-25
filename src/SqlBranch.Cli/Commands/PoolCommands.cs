@@ -80,8 +80,8 @@ internal static class PoolCommands
         // not_initialized, then engine_stopped: the upgrade reads and locks the pool through the running engine.
         ImageCatalog.RequireRunningEngine(context.Pool);
 
-        var result = new PoolUpgrader(services.Runtime, services.Connector, redactor, services.EngineName, services.Clock)
-            .UpgradeAsync(context.Pool, context.Settings.Port, progress, CancellationToken.None).GetAwaiter().GetResult();
+        var result = new PoolUpgrader(services.Runtime, services.Connector, redactor, services.EngineName, services.Clock, services.UpgradeDelay)
+            .UpgradeAsync(context.Pool, context.Settings.Port, progress, context.Settings.PublishWait, CancellationToken.None).GetAwaiter().GetResult();
         return Describe(result);
     }
 

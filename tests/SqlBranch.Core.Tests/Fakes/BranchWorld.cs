@@ -42,8 +42,8 @@ internal sealed partial class BranchWorld
             if (script.Contains("SQLBRANCH_BR|", StringComparison.Ordinal))
             {
                 // The listing script of 'branch list'.
-                var lines = (Catalog is null ? Array.Empty<string>() : [$"SQLBRANCH_CAT|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(Catalog))}"])
-                    .Concat(ImageExists ? ["SQLBRANCH_IMG|shop"] : Array.Empty<string>())
+                var lines = (Catalog is null ? Array.Empty<string>() : [$"SQLBRANCH_CAT|{ImageName}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(Catalog))}"])
+                    .Concat(ImageExists ? [$"SQLBRANCH_IMG|{ImageName}"] : Array.Empty<string>())
                     .Concat(Records.Select(r => $"SQLBRANCH_BR|{r.Key}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(r.Value))}|1048576"));
                 return FakeContainerRuntime.Ok(string.Join('\n', lines) + "\n");
             }
@@ -143,6 +143,9 @@ internal sealed partial class BranchWorld
     public Dictionary<string, string> States { get; } = [];
 
     public bool ImageExists { get; set; } = true;
+
+    /// <summary>The name of the one image the fake lists.</summary>
+    public string ImageName { get; set; } = "shop";
 
     /// <summary>The <c>catalog.json</c> of the image <c>shop</c> on a format-2 pool; null means it has none.</summary>
     public string? Catalog { get; set; }

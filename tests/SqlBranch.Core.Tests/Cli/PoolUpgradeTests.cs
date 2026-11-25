@@ -15,6 +15,8 @@ public sealed class PoolUpgradeTests
         public DateTimeOffset Now { get; set; } = now;
 
         public override DateTimeOffset GetUtcNow() => Now;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => Now.UtcTicks;
     }
 
     private static readonly DateTimeOffset Start = new(2026, 12, 1, 9, 0, 0, TimeSpan.Zero);
@@ -25,6 +27,7 @@ public sealed class PoolUpgradeTests
     public PoolUpgradeTests()
     {
         _pool.World.Clock = _clock;
+        _pool.World.UpgradeDelay = (duration, _) => { _clock.Now += duration; return Task.CompletedTask; };
         _pool.AddImage("shop");
         _pool.AddImage("crm");
         _pool.AddBranch("dev1");
@@ -58,12 +61,12 @@ public sealed class PoolUpgradeTests
     }
 
     [Fact]
-    public void The_upgrade_writes_the_fence_then_each_high_water_mark_and_catalog_then_the_done_record_and_no_branch_record()
+    public void The_upgrade_writes_the_fence_then_each_high_water_mark_and_catalog_then_branch_records_then_the_done_record()
     {
         Json();
 
         Assert.Equal(
-            ["credentials:running", "enumerate", "ids:crm", "catalog:crm", "ids:shop", "catalog:shop", "credentials:done"],
+            ["credentials:running", "enumerate", "enumerate", "ids:crm", "catalog:crm", "ids:shop", "catalog:shop", "branch:dev1", "branch:old1", "credentials:done"],
             _pool.Writes);
         var final = Credentials();
         Assert.Equal(2, final.Format);
@@ -99,7 +102,7 @@ public sealed class PoolUpgradeTests
         Assert.Contains("warning:", run.Err, StringComparison.Ordinal);
         Assert.Contains("cannot be undone", run.Err, StringComparison.Ordinal);
         var branches = run.Json.GetProperty("branches");
-        Assert.Empty(branches.GetProperty("pinned").EnumerateArray());
+        Assert.Equal(["dev1", "old1"], branches.GetProperty("pinned").EnumerateArray().Select(b => b.GetString()));
         Assert.Empty(branches.GetProperty("unknownBase").EnumerateArray());
         Assert.Empty(branches.GetProperty("removedBase").EnumerateArray());
     }
@@ -168,7 +171,7 @@ public sealed class PoolUpgradeTests
         Assert.Equal("pool_full", failed.Json.GetProperty("error").GetProperty("code").GetString());
         Assert.Contains("sqlbranch pool upgrade --yes", failed.Json.GetProperty("error").GetProperty("message").GetString(), StringComparison.Ordinal);
         Assert.Equal(UpgradeRecord.Running, Credentials().Upgrade!.State);
-        Assert.Equal(["credentials:running", "enumerate", "ids:crm", "catalog:crm"], _pool.Writes);
+        Assert.Equal(["credentials:running", "enumerate", "enumerate", "ids:crm", "catalog:crm"], _pool.Writes);
 
         _pool.FailWrite = null;
         _clock.Now = Start.AddDays(3);
