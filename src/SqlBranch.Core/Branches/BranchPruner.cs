@@ -1,5 +1,6 @@
 using SqlBranch.Core.Containers;
 using SqlBranch.Core.Engine;
+using SqlBranch.Core.Output;
 using SqlBranch.Core.Secrets;
 
 namespace SqlBranch.Core.Branches;
@@ -40,6 +41,8 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
                     continue;
                 }
 
+                await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
+
                 // The original branch could have been removed and the name reused since listing.
                 var (_, record) = await engine.ReadRecordAsync(name, cancellationToken).ConfigureAwait(false);
                 if (record is not { Ephemeral: true, ExpiresAt: { } expiry } || expiry >= time.GetUtcNow() ||
@@ -51,6 +54,10 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
                 var removal = await BranchRemover.RemoveLockedAsync(engine, name, cancellationToken).ConfigureAwait(false);
                 removed.Add(name);
                 warnings.AddRange(removal.Warnings);
+            }
+            catch (SqlBranchException ex) when (ex.Code == ErrorCodes.PoolUpgradeRequired)
+            {
+                throw;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

@@ -117,6 +117,9 @@ public sealed partial class BacpacBuilder(
         {
             throw new SqlBranchException(ErrorCodes.ImageExists, $"Another build of image '{image}' is running.");
         }
+
+        // The format may have changed since the first read (design D8); act on what it is now.
+        credentials = await PoolUpgradeGuard.RecheckAsync(runtime, engineName, engine.Image, pool.Location, session, token).ConfigureAwait(false);
         // The folder test also runs on format 2: a leftover folder with no catalog or manifest must fail here with
         // image_exists, not later at the publishing move.
         var imagePath = Quoting.Shell(ImagePaths.Image(image));

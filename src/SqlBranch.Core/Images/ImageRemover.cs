@@ -58,25 +58,39 @@ public sealed class ImageRemover
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
 
-        // D13 permits removing an unreadable catalog to unblock the upgrade's own repair path.
-        if (credentials.Upgrade is { State: UpgradeRecord.Running })
-        {
-            var before = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
-            if (before.Images.FirstOrDefault(i => i.Name == name)?.CatalogReadable != false)
-            {
-                await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
         // The same lock a build of this name holds, so a removal and a build of one name cannot overlap.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false))
         {
+            // A running upgrade holds every existing image's lock (design D6 step 2): say so, not "a build or a removal is running".
+            // A dead one does not, so a busy lock then is somebody else's and keeps its own text.
+            var current = await EngineCredentials.ReadThroughEngineAsync(_runtime, _engineName, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false);
+            if (current is { Upgrade.State: UpgradeRecord.Running } &&
+                await PoolUpgradeGuard.IsLiveAsync(session, cancellationToken).ConfigureAwait(false))
+            {
+                await PoolUpgradeGuard.RequireWritableAsync(current, session, cancellationToken).ConfigureAwait(false);
+            }
+
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is working on the image '{name}': a build or a removal is running. Wait for it to finish.");
         }
 
+        // The format and the fence are read again after the lock (design D8): the first read may be stale.
+        credentials = await EngineCredentials.ReadThroughEngineAsync(_runtime, _engineName, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+            ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
+                $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+
         var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
-        var entry = listing.Images.FirstOrDefault(i => i.Name == name)
+        var found = listing.Images.FirstOrDefault(i => i.Name == name);
+
+        // D13 permits removing an unreadable catalog to unblock the upgrade's own repair path, but only when the upgrade is dead:
+        // while it runs, every write waits for it.
+        if (credentials.Upgrade is { State: UpgradeRecord.Running } &&
+            (found?.CatalogReadable != false || await PoolUpgradeGuard.IsLiveAsync(session, cancellationToken).ConfigureAwait(false)))
+        {
+            await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
+        }
+
+        var entry = found
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
 
         if (entry.Branches.Count > 0 && !force)

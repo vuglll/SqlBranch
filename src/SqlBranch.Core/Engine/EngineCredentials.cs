@@ -49,24 +49,41 @@ public static class EngineCredentials
         PoolLocation pool,
         CancellationToken cancellationToken)
     {
-        // The file travels as base64. The runtime masks every registered secret in what a container prints,
-        // so the plain JSON would come back with the password replaced by ***.
-        var script = $"if [ -f {Path} ]; then echo {Prefix}$(base64 -w0 {Path}); else echo {Prefix}none; fi";
-        var result = await PoolWork.RunAsync(runtime, image, pool, script, readOnly: true, cancellationToken).ConfigureAwait(false);
-        var line = result.Succeeded
-            ? result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault(l => l.StartsWith(Prefix, StringComparison.Ordinal))
-            : null;
-        if (line is null)
+        var result = await PoolWork.RunAsync(runtime, image, pool, ReadScript, readOnly: true, cancellationToken).ConfigureAwait(false);
+        if (!TryParseReply(result, pool, out var file))
         {
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Could not read the engine credentials from {pool} (exit code {result.ExitCode}).");
         }
 
-        var encoded = line[Prefix.Length..];
+        return file;
+    }
+
+    // The file travels as base64. The runtime masks every registered secret in what a container prints,
+    // so the plain JSON would come back with the password replaced by ***.
+    private static readonly string ReadScript = $"if [ -f {Path} ]; then echo {Prefix}$(base64 -w0 {Path}); else echo {Prefix}none; fi";
+
+    private const string ExecPrefix = "SQLBRANCH_POOLFORMAT=";
+
+    /// <summary>The script of the exec re-read (design D8); it prints the file as base64 after <c>SQLBRANCH_POOLFORMAT=</c>.</summary>
+    internal static readonly string RereadScript = $"if [ -f {Path} ]; then echo {ExecPrefix}$(base64 -w0 {Path}); else echo {ExecPrefix}none; fi";
+
+    private static bool TryParseReply(ContainerResult result, PoolLocation pool, out CredentialsFile? file, string prefix = Prefix)
+    {
+        file = null;
+        var line = result.Succeeded
+            ? result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(l => l.StartsWith(prefix, StringComparison.Ordinal))
+            : null;
+        if (line is null)
+        {
+            return false;
+        }
+
+        var encoded = line[prefix.Length..];
         if (encoded == "none")
         {
-            return null;
+            return true;
         }
 
         string json;
@@ -79,7 +96,30 @@ public static class EngineCredentials
             throw new SqlBranchException(ErrorCodes.OperationFailed, $"The engine credentials file in {pool} is not valid.");
         }
 
-        return CredentialsFile.Parse(json, pool.ToString());
+        file = CredentialsFile.Parse(json, pool.ToString());
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the file again for the re-read after a command's locks (design D8): <c>docker exec</c> in the running engine, which
+    /// starts no container, and a work container when the exec cannot answer (the engine's user cannot read the file, or the
+    /// exec failed). Returns null when the pool has no credentials file.
+    /// </summary>
+    public static async Task<CredentialsFile?> ReadThroughEngineAsync(
+        IContainerRuntime runtime,
+        string engineName,
+        string image,
+        PoolLocation pool,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        var result = await runtime.ExecAsync(engineName, ["sh", "-c", RereadScript], cancellationToken).ConfigureAwait(false);
+        if (TryParseReply(result, pool, out var file, ExecPrefix))
+        {
+            return file;
+        }
+
+        return await ReadFileAsync(runtime, image, pool, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Writes the file readable and writable by the engine's user only.</summary>

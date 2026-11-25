@@ -117,9 +117,14 @@ public sealed class BranchCreator
         // Shared: other creates from this image run together, while 'image rm' and 'image build' of it wait.
         if (!await EngineLocks.TryTakeSharedAsync(session, EngineLocks.Image(image), cancellationToken).ConfigureAwait(false))
         {
+            // An upgrade holds every existing image's lock while it waits (design D8): say so, not "being built or removed".
+            await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is building or removing the image '{image}'. Wait for it to finish, then run the command again.");
         }
+
+        // The format may have changed since the first read (design D8); nothing has been written yet.
+        await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
 
         var createdAt = _time.GetUtcNow();
         var record = new BranchRecord(image, CloneModeNames.Of(CloneMode.Copy), createdAt, labels ?? new Dictionary<string, string>(),

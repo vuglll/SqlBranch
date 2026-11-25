@@ -21,9 +21,13 @@ internal sealed class BranchEngine : IAsyncDisposable
 
     private readonly IContainerRuntime _runtime;
     private readonly string _engineName;
+    private readonly string _engineImage;
+    private readonly PoolLocation _pool;
 
-    private BranchEngine(IContainerRuntime runtime, string engineName, string password, EngineEndpoint endpoint, IEngineSession session)
+    private BranchEngine(IContainerRuntime runtime, string engineName, string engineImage, PoolLocation pool, string password, EngineEndpoint endpoint, IEngineSession session)
     {
+        _engineImage = engineImage;
+        _pool = pool;
         _runtime = runtime;
         _engineName = engineName;
         Password = password;
@@ -32,12 +36,22 @@ internal sealed class BranchEngine : IAsyncDisposable
     }
 
     /// <summary>The pool format read with the credentials: 1 or 2.</summary>
-    public int PoolFormat { get; private init; } = 1;
+    public int PoolFormat { get; private set; } = 1;
 
-    private CredentialsFile Credentials { get; init; } = null!;
+    private CredentialsFile Credentials { get; set; } = null!;
 
     internal Task RequireWritableAsync(CancellationToken cancellationToken) =>
         PoolUpgradeGuard.RequireWritableAsync(Credentials, Session, cancellationToken);
+
+    /// <summary>
+    /// Reads the pool format again after the command's locks (design D8). During an unfinished or running upgrade it exits 3
+    /// <c>pool_upgrade_required</c>; otherwise the command goes on with the format it has now.
+    /// </summary>
+    internal async Task RecheckFormatAsync(CancellationToken cancellationToken)
+    {
+        Credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, _engineImage, _pool, Session, cancellationToken).ConfigureAwait(false);
+        PoolFormat = Credentials.Format;
+    }
 
     public IContainerRuntime Runtime => _runtime;
 
@@ -69,7 +83,7 @@ internal sealed class BranchEngine : IAsyncDisposable
 
         var endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort));
         var session = await connector.ConnectAsync(endpoint, password, cancellationToken).ConfigureAwait(false);
-        return new BranchEngine(runtime, engineName, password, endpoint, session) { PoolFormat = credentials.Format, Credentials = credentials };
+        return new BranchEngine(runtime, engineName, engine.Image, pool.Location, password, endpoint, session) { PoolFormat = credentials.Format, Credentials = credentials };
     }
 
     public ValueTask DisposeAsync() => Session.DisposeAsync();

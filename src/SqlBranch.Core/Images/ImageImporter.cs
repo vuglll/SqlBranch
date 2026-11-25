@@ -179,6 +179,9 @@ public sealed class ImageImporter
                 $"Another build or import of the image '{targetName}' is running. Wait for it to finish, or choose another name with --as.");
         }
 
+        // The format may have changed since the first read (design D8); act on what it is now.
+        credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, engine.Image, pool.Location, session, cancellationToken).ConfigureAwait(false);
+
         var state = new State(_newId(), targetName, archive) { PoolFormat = credentials.Format };
         // The build lock is what lets status tell a running import from a dead one: an import uses the build folder.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Build(state.Id), cancellationToken).ConfigureAwait(false))

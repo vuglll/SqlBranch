@@ -68,9 +68,14 @@ public sealed class BranchResetter
         var image = record.Image;
         if (!await EngineLocks.TryTakeSharedAsync(engine.Session, EngineLocks.Image(image), cancellationToken).ConfigureAwait(false))
         {
+            // An upgrade holds every existing image's lock while it waits (design D8): say so, not "being built or removed".
+            await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is building or removing the image '{image}'. Wait for it to finish, then run the command again.");
         }
+
+        // The format may have changed since the first read (design D8); nothing has been changed yet.
+        await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
 
         // On format 2 the base is the version recorded at create (design D5); a removed or unknown base is refused here, before
         // any connection is closed. On format 1 the base is the image.

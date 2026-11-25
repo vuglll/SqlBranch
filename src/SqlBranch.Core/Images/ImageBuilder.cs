@@ -235,6 +235,9 @@ public sealed partial class ImageBuilder
                 $"Another build of the image '{request.Name}' is running. Wait for it to finish, or choose another name.");
         }
 
+        // The format may have changed since the first read (design D8); act on what it is now.
+        credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, engine.Image, pool.Location, session, cancellationToken).ConfigureAwait(false);
+
         var state = new State(request, _newId()) { PoolFormat = credentials.Format, EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
         // The build lock is what lets status tell a running build from a dead one.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Build(state.Id), cancellationToken).ConfigureAwait(false))
