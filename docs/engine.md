@@ -197,8 +197,8 @@ operand or another option, the command exits 2 `usage_error` before it runs any 
 What it does, in order: takes a pool-wide upgrade lock (a second upgrade exits 1 `catalog_busy`), writes the new credentials
 file with the upgrade marked `running`, locks every existing image and branch, writes each image's `catalog.json` and
 version-ID record with the first ID `<name>@<start time>` (UTC, to the millisecond), and marks the upgrade `done`. It writes
-only the credentials file, the catalogs, the per-name ID records under `images/.ids/` and, in a later step, branch records;
-it never changes image or branch data files, manifests, databases, logins or the engine container. A rerun after a kill or
+only the credentials file, the catalogs, the per-name ID records under `images/.ids/` and branch records. It writes the branch records
+in the last step of the upgrade. It never changes image or branch data files, manifests, databases, logins or the engine container. A rerun after a kill or
 a full pool continues from what is recorded and gives the same IDs. On a pool that is already format 2 it changes nothing
 and exits 0.
 
@@ -218,7 +218,7 @@ works with both formats.
 A branch record that the upgrade cannot read, or whose image name is not valid, does not stop the upgrade. The upgrade
 leaves that record untouched, prints one warning on standard error naming the branch, and finishes:
 
-```
+```text
 warning: The record of branch 'dev3' (/pool/branches/dev3/branch.json) cannot be read, so the upgrade left it as it is. Run 'sqlbranch branch rm dev3' to remove the branch.
 ```
 
@@ -232,8 +232,8 @@ for 0.2.0, 0.2.1 and 0.2.2 (checked against all three on 2026-11-24, see the
 stop every 0.2.x tool and test run that uses the pool (see [Stop 0.2.x tools first](#stop-02x-tools-first-and-what-adoption-is)).
 
 With the engine running, a 0.2.x `image rm`, `branch create`, `branch list`, `status` and `engine start` exit 1 with
-`operation_failed` and this message. The same holds, by the 0.2.2 source, for `init` on the existing pool, `image build`,
-`image import` and every other branch command. They change nothing: every image hash and branch record stays as it was.
+`operation_failed` and this message. They change nothing: every image hash and branch record stays as it was.
+The same holds, by the 0.2.2 source, for `init` on the existing pool, `image build`, `image import` and every other branch command.
 
 ```text
 The engine credentials file in <pool> is not valid.

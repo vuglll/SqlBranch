@@ -81,15 +81,15 @@ SqlBranch.Testing reference in every test project to 0.3 or later. Updating the 
 See [engine.md](engine.md#older-tools-on-an-upgraded-pool) for what the upgrade changes.
 
 With the engine running, SqlBranch.Testing 0.2.0, 0.2.1 and 0.2.2 all behave the same on an upgraded pool: create
-throws `InvalidOperationException`, after the package writes `Could not prune expired fixtures: <message>` to standard
-error, and `SqlBranchEnvironment.IsAvailableAsync()` returns false. The message has no fix command:
+throws `InvalidOperationException`, after the package writes `Could not prune expired fixtures: <message>` to the log
+(standard error by default), and `SqlBranchEnvironment.IsAvailableAsync()` returns false. The message has no fix command:
 
 ```text
 The engine credentials file in <pool> is not valid.
 ```
 
 `<pool>` is the pool directory or `Docker volume <name>`. With the engine stopped the package reports the stopped
-engine, as before the upgrade.
+engine, by the 0.2.2 source, as before the upgrade.
 
 **Tests that skip when the 0.2.x availability check returns false are skipped silently after the upgrade.** The check
 logs nothing and the tests do not fail, so a green run can mean nothing ran. Look for skipped counts in CI, and update the

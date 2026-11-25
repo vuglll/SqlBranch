@@ -388,7 +388,10 @@ public sealed class PoolUpgradeBindingWaitTests
         Assert.Equal(badimage, _pool.Records["badimage"]);
         Assert.DoesNotContain("branch:broken", _pool.Writes);
         Assert.DoesNotContain("branch:badimage", _pool.Writes);
-        Assert.Contains("branch 'broken'", run.Err, StringComparison.Ordinal);
+        var warningLines = run.Err.Split('\n')
+            .Where(line => line.StartsWith("warning:", StringComparison.Ordinal)).ToArray();
+        Assert.Single(warningLines, line => line.Contains("branch 'broken'", StringComparison.Ordinal));
+        Assert.Single(warningLines, line => line.Contains("branch 'badimage'", StringComparison.Ordinal));
         Assert.Contains("sqlbranch branch rm broken", run.Err, StringComparison.Ordinal);
         Assert.Contains("sqlbranch branch rm badimage", run.Err, StringComparison.Ordinal);
         Assert.Equal(0, _pool.Run("status", "--format", "json").Exit);
