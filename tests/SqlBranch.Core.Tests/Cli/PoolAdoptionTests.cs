@@ -283,6 +283,8 @@ public sealed class PoolAdoptionTests
 
         Assert.Equal(0, Run("image", "list").Exit);
         Assert.Equal(0, Run("branch", "list").Exit);
+        Assert.Equal(0, _pool.Run("branch", "conn", "dev1").Exit);
+        _ = _pool.Run("image", "export", "crm", "--to", "/work/crm.sbimg");
         Assert.Equal(0, _pool.Run("status").Exit);
 
         Assert.Empty(_pool.Writes);
@@ -303,5 +305,67 @@ public sealed class PoolAdoptionTests
 
         Assert.Equal(0, removed.Exit);
         Assert.Equal(["crm@20261202T080000000Z"], removed.Json.GetProperty("image").GetProperty("versions").EnumerateArray().Select(v => v.GetString()));
+    }
+
+    [Fact]
+    public void Create_refused_by_requireThin_on_a_legacy_image_writes_nothing()
+    {
+        Format2("copy");
+        _pool.World.Environment["SQLBRANCH_REQUIRE_THIN"] = "true";
+        _pool.AddImage("crm");
+        var files = _pool.Images["crm"];
+
+        var run = Run("branch", "create", "dev7", "--from", "crm");
+
+        Assert.Equal(3, run.Exit);
+        Assert.Empty(_pool.Writes);
+        Assert.Equal(files, _pool.Images["crm"]);
+        Assert.DoesNotContain("dev7", _pool.Records.Keys);
+    }
+
+    [Fact]
+    public void Reset_refused_by_requireThin_on_a_legacy_image_writes_nothing()
+    {
+        Format2("copy");
+        _pool.World.Environment["SQLBRANCH_REQUIRE_THIN"] = "true";
+        _pool.AddImage("shop");
+        _pool.AddBranch("dev8", createdAt: new DateTimeOffset(2026, 12, 1, 10, 0, 0, TimeSpan.Zero));
+        _pool.World.Connector.Databases["dev8"] = ["/pool/branches/dev8/data/Shop.mdf"];
+        var record = _pool.Records["dev8"];
+
+        var run = Run("branch", "reset", "dev8");
+
+        Assert.Equal(3, run.Exit);
+        Assert.Empty(_pool.Writes);
+        Assert.Equal(record, _pool.Records["dev8"]);
+    }
+
+    [Fact]
+    public void Reset_of_a_legacy_branch_whose_image_was_replaced_in_the_adoption_window_is_catalog_busy_and_writes_nothing()
+    {
+        Format2("thin");
+        _pool.AddImage("shop");
+        _pool.AddBranch("dev8", createdAt: new DateTimeOffset(2026, 12, 1, 10, 0, 0, TimeSpan.Zero));
+        _pool.World.Connector.Databases["dev8"] = ["/pool/branches/dev8/data/Shop.mdf"];
+        _pool.World.Connector.TrackSessionLocks = false;
+        var record = _pool.Records["dev8"];
+        // 'image rm --force' and a rebuild by an older client land between the shared lock and the exclusive one.
+        var takes = 0;
+        _pool.World.Connector.OnTakeLock = taken =>
+        {
+            // The first take is the shared one of the reset, the second the adoption's exclusive one.
+            if (taken == EngineLocks.Image("shop") && ++takes == 2)
+            {
+                _pool.Images["shop"] = new UpgradeWorld.FakeImage("shop", true, null, null) { BuiltAt = new DateTimeOffset(2026, 12, 1, 9, 30, 0, TimeSpan.Zero) };
+            }
+        };
+
+        var run = Run("branch", "reset", "dev8");
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("catalog_busy", Code(run.Json));
+        Assert.Equal(record, _pool.Records["dev8"]);
+        Assert.Empty(_pool.Writes);
+        Assert.DoesNotContain(_pool.World.Connector.Statements, s => s.Contains("DROP DATABASE", StringComparison.Ordinal));
     }
 }

@@ -58,6 +58,13 @@ public sealed partial class BranchCreateTests
                 return FakeContainerRuntime.Fail(1, "boom");
             }
 
+            // A catalog the command wrote is the catalog a later read finds (adoption reads the image again).
+            if (script.Contains("catalog.json.new", StringComparison.Ordinal) &&
+                System.Text.RegularExpressions.Regex.Match(script, "printf %s '([A-Za-z0-9+/=]+)' \\| base64 -d > '/pool/images/[^']+/catalog\\.json\\.new'") is { Success: true } written)
+            {
+                _catalogFile = written.Groups[1].Value;
+            }
+
             if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
             {
                 return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + _catalogFile);

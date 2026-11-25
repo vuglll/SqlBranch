@@ -24,10 +24,28 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         return JsonDocument.Parse(run.Out).RootElement.Clone();
     }
 
-    /// <summary>SHA-256 and modification time (with nanoseconds) of every image data file and manifest and every branch data file.</summary>
+    /// <summary>
+    /// SHA-256 and modification time (with nanoseconds) of every image data file and manifest and of the offline branch's data files,
+    /// and name and size of the open branch's data files.
+    /// </summary>
     private Task<string> DataSnapshotAsync() => Kit.InPoolAsync(
-        "{ find /pool/images -type f \\( -path '*/data/*' -o -name manifest.json \\) ; find /pool/branches -type f -path '*/data/*'; } | sort | " +
-        "while read -r f; do echo \"$(sha256sum \"$f\" | cut -d' ' -f1) $(stat -c %y \"$f\") $f\"; done");
+        "{ find /pool/images -type f \\( -path '*/data/*' -o -name manifest.json \\) ; find /pool/branches/upold1/data -type f 2>/dev/null; } | sort | " +
+        "while read -r f; do echo \"$(sha256sum \"$f\" | cut -d' ' -f1) $(stat -c %y \"$f\") $f\"; done; " +
+        // The files of a branch whose database is open are written by the engine in the background (lazy writer, log), so their
+        // content cannot be compared across a command. The names and sizes are: the upgrade must not add, remove or resize one.
+        "find /pool/branches/updev1/data -type f 2>/dev/null | sort | while read -r f; do echo \"$(stat -c %s \"$f\") $f\"; done");
+
+    /// <summary>
+    /// Takes a branch database offline so the engine stops writing its files, or brings it back. The snapshot compares those files
+    /// byte for byte, which an online database does not allow: the engine writes attached files in the background.
+    /// </summary>
+    private async Task SetOfflineAsync(string branch, bool offline)
+    {
+        await using var connection = await Kit.ConnectAsync("master");
+        await BranchKit.ExecuteAsync(connection, offline
+            ? $"ALTER DATABASE [{branch}] SET OFFLINE WITH ROLLBACK IMMEDIATE;"
+            : $"ALTER DATABASE [{branch}] SET ONLINE;");
+    }
 
     /// <summary>
     /// The snapshot once two reads three seconds apart agree. A running engine keeps writing the log of an attached database for a
@@ -116,6 +134,9 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         }
 
         output.WriteLine("clone mode: " + await Kit.CloneModeAsync());
+        // upold1 is offline for the snapshots, so its files are compared byte for byte; updev1 stays open (its connection must
+        // survive the upgrade), so only its file names and sizes are compared. Images are compared byte for byte.
+        await SetOfflineAsync("upold1", offline: true);
         Assert.Equal(1, Json(World.RunCli("status", "--format", "json")).GetProperty("poolFormat").GetInt32());
         var before = await QuietSnapshotAsync();
         var loginsBefore = await LoginsAsync();
@@ -128,6 +149,7 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         // "Data untouched by the upgrade": taken right after the command, before anything else touches the live branch files.
         var afterUpgrade = await DataSnapshotAsync();
         Assert.Equal(before, afterUpgrade);
+        await SetOfflineAsync("upold1", offline: false);
         Assert.Equal(2, upgraded.GetProperty("pool").GetProperty("format").GetInt32());
         Assert.Equal(1, upgraded.GetProperty("pool").GetProperty("previousFormat").GetInt32());
         var versions = upgraded.GetProperty("images").EnumerateArray().ToDictionary(i => i.GetProperty("name").GetString()!, i => i.GetProperty("version").GetString()!);
@@ -180,7 +202,9 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         Assert.Contains("already uses format 2", rerunText.Out, StringComparison.Ordinal);
 
         // ...and after the rerun, when only the status and list queries ran since the first snapshot.
+        await SetOfflineAsync("upold1", offline: true);
         Assert.Equal(before, await DataSnapshotAsync());
+        await SetOfflineAsync("upold1", offline: false);
         Assert.Equal(recordsBefore, await BranchRecordsAsync());
         Assert.Equal(loginsBefore, await LoginsAsync());
         Assert.Equal(startedBefore, await StartedAtAsync(World));

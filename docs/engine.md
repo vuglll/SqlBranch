@@ -294,7 +294,7 @@ with `image.versions` `[]`. A branch record without a base shows its `imageVersi
 `image list`, `image export`, `branch list`, `branch conn` and `status` never adopt.
 
 The first command that writes with the item adopts it. `branch create` and `branch reset` give an image its first version
-ID by the usual rule (the clock at that moment, or one millisecond after the last ID the name had, so a name that was
+ID by the usual rule (the command's start time, or one millisecond after the last ID the name had, so a name that was
 removed and reused still gets a larger ID than any it had) and write the catalog before the branch records its base.
 A branch record without base fields is bound at reset by the same rule as in the upgrade: pinned to the image's first
 version when its `createdAt` is at or after the manifest's `builtAt`, otherwise with an unknown base (it cannot be reset;

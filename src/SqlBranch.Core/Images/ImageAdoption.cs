@@ -37,14 +37,21 @@ internal static class ImageAdoption
     public static async Task<SqlBranchException?> BusyIfUnadoptedAsync(IContainerRuntime runtime, string engineName, string name, CancellationToken cancellationToken) =>
         await IsUnadoptedAsync(runtime, engineName, name, cancellationToken).ConfigureAwait(false) ? Busy(name) : null;
 
+    /// <summary>The refusal when the image is not the one the command read before adopting it.</summary>
+    private static SqlBranchException Changed(string name) =>
+        new(ErrorCodes.CatalogBusy,
+            $"The image '{name}' changed while it was being adopted, so this command cannot use the version it read. Nothing was changed. Run the command again.");
+
     /// <summary>
     /// Adopts <paramref name="legacy"/> (an image read with a null ID). The command holds the image's shared lock, which is given
     /// back before the exclusive lock is tried without waiting; when another operation holds the image, nothing is changed and
-    /// the command exits 1 <c>catalog_busy</c>. The ID is max(clock, last allocated + 1 ms), as for a build (D4, D7). The exclusive
-    /// lock is kept for the rest of the command.
+    /// the command exits 1 <c>catalog_busy</c>. The ID is max(command start time, last allocated + 1 ms) (D4, D7). Once the
+    /// catalog is written the exclusive lock is given back and the shared lock taken again, so parallel creates from the image
+    /// are not held up for the rest of the command. The image is read again under each lock: when it is no longer the one the
+    /// command read (a different <c>builtAt</c> or directory), the command exits 1 <c>catalog_busy</c> and nothing is used.
     /// </summary>
     public static async Task<ImageVersionData> AdoptAsync(
-        IContainerRuntime runtime, string engineName, IEngineSession session, string name, ImageVersionData legacy, TimeProvider clock, CancellationToken cancellationToken)
+        IContainerRuntime runtime, string engineName, IEngineSession session, string name, ImageVersionData legacy, DateTimeOffset commandStart, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(legacy);
         await EngineLocks.ReleaseAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false);
@@ -53,15 +60,38 @@ internal static class ImageAdoption
             throw Busy(name);
         }
 
-        // Read again under the exclusive lock: another command may have adopted or removed the image since the first read.
+        // Read again under the exclusive lock: another command may have adopted, replaced or removed the image since the first read.
         var current = await ImageCatalog.ReadVersionAsync(runtime, engineName, name, null, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
-        if (current.Id is not null)
+        if (current.Directory != legacy.Directory || current.Manifest.BuiltAt != legacy.Manifest.BuiltAt)
         {
-            return current;
+            throw Changed(name);
         }
 
-        var id = await ImageVersions.PublishAsync(runtime, engineName, name, clock, cancellationToken).ConfigureAwait(false);
-        return current with { Id = id };
+        var id = current.Id;
+        if (id is null)
+        {
+            id = await ImageVersions.PublishAsync(runtime, engineName, name, new FixedClock(commandStart), cancellationToken).ConfigureAwait(false);
+        }
+
+        // Back to the shared lock. The gap lets 'image rm' in, so the image is checked once more before the command uses it.
+        await EngineLocks.ReleaseAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false);
+        if (!await EngineLocks.TryTakeSharedAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false))
+        {
+            throw Busy(name);
+        }
+
+        var again = await ImageCatalog.ReadVersionAsync(runtime, engineName, name, null, cancellationToken).ConfigureAwait(false);
+        if (again is null || again.Id != id || again.Directory != legacy.Directory || again.Manifest.BuiltAt != legacy.Manifest.BuiltAt)
+        {
+            throw Changed(name);
+        }
+
+        return again;
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 }

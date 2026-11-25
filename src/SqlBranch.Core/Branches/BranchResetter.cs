@@ -50,6 +50,7 @@ public sealed class BranchResetter
         // Before any SQL runs and before any file is touched.
         NameRules.ValidateBranch(name);
 
+        var commandStart = _time.GetUtcNow();
         await using var engine = await BranchEngine.OpenAsync(_runtime, _connector, _redactor, _engineName, pool, fallbackPort, cancellationToken).ConfigureAwait(false);
         await engine.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
         await engine.TakeBranchLockAsync(name, cancellationToken).ConfigureAwait(false);
@@ -91,10 +92,11 @@ public sealed class BranchResetter
         // any connection is closed. On format 1 the base is the image.
         string imageDirectory = ".";
         string? version = null;
+        ImageVersionData? found = null;
         ImageManifest manifest;
         if (engine.PoolFormat >= 2)
         {
-            var found = await ReadBaseAsync(engine, name, record, cancellationToken).ConfigureAwait(false);
+            found = await ReadBaseAsync(engine, name, record, cancellationToken).ConfigureAwait(false);
             manifest = found.Manifest;
             imageDirectory = found.Directory;
             version = found.Id;
@@ -124,6 +126,17 @@ public sealed class BranchResetter
         {
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"A database named '{name}' exists on the engine but has no file under {BranchPaths.Branch(name)}, so it is not this branch's and SqlBranch will not drop it. Nothing was changed.");
+        }
+
+        // An image an older client wrote after the upgrade gets its first version now (design D7): after every refusal above, so a
+        // refused command writes nothing, and before the first file is made. The base was bound against the version read earlier;
+        // adoption refuses when the image is no longer that one.
+        if (engine.PoolFormat >= 2 && version is null && record.BaseKnown is null)
+        {
+            var adopted = await ImageAdoption.AdoptAsync(_runtime, _engineName, engine.Session, image, found!, commandStart, cancellationToken).ConfigureAwait(false);
+            manifest = adopted.Manifest;
+            imageDirectory = adopted.Directory;
+            version = adopted.Id;
         }
 
         // 3. Clone into next/. A leftover next/ of an earlier reset that died is debris: this command holds the branch lock.
@@ -183,8 +196,7 @@ public sealed class BranchResetter
     /// <summary>
     /// The version a format-2 branch is reset to: the recorded one, or, for a record no format-2 command has written (an older
     /// client wrote it after the upgrade), the first version when the branch was created at or after the image's <c>builtAt</c>
-    /// (design D7). An image an older client wrote is adopted first, but only once the base is known to be bindable, so a refusal
-    /// changes nothing. A removed or unknown base is <c>image_not_found</c> and names the way out.
+    /// (design D7). Adoption of an image an older client wrote is left to the caller, after its other refusals. A removed or unknown base is <c>image_not_found</c> and names the way out.
     /// </summary>
     private async Task<ImageVersionData> ReadBaseAsync(BranchEngine engine, string name, BranchRecord record, CancellationToken cancellationToken)
     {
@@ -196,7 +208,7 @@ public sealed class BranchResetter
         {
             var current = await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, null, cancellationToken).ConfigureAwait(false)
                 ?? throw new SqlBranchException(ErrorCodes.ImageNotFound,
-                    $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.");
+                    Refusal($"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset."));
 
             // The version whose files are at the top of the image folder is the one a 0.2.2 record can mean.
             if (current.Directory != "." || record.CreatedAt < current.Manifest.BuiltAt)
@@ -205,9 +217,7 @@ public sealed class BranchResetter
                     Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so that version no longer exists for this branch and the branch cannot be reset."));
             }
 
-            return current.Id is null
-                ? await ImageAdoption.AdoptAsync(_runtime, _engineName, engine.Session, image, current, _time, cancellationToken).ConfigureAwait(false)
-                : current;
+            return current;
         }
 
         if (record.BaseKnown == false)

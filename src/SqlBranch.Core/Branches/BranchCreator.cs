@@ -174,12 +174,6 @@ public sealed class BranchCreator
 
         // 1. The image exists and the name is free. Both are read under the locks, so neither can change meanwhile.
         var source = await ReadImageAsync(image, poolFormat, cancellationToken).ConfigureAwait(false);
-        if (poolFormat >= 2 && source.Id is null)
-        {
-            // An image an older client wrote after the upgrade: give it its first version before the base is recorded (design D7).
-            source = await ImageAdoption.AdoptAsync(_runtime, _engineName, session, image, source, _time, cancellationToken).ConfigureAwait(false);
-        }
-
         var manifest = source.Manifest;
         state.Version = source.Id;
         await RequireFreeNameAsync(session, name, cancellationToken).ConfigureAwait(false);
@@ -191,6 +185,15 @@ public sealed class BranchCreator
         var mode = copy ? CloneMode.Copy : poolMode;
         await BranchGuards.RequireSpaceForCopyAsync(_runtime, _engineName, mode, manifest.TotalBytes, $"a full copy of the image '{image}'", cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("check", cancellationToken).ConfigureAwait(false);
+
+        if (poolFormat >= 2 && source.Id is null)
+        {
+            // An image an older client wrote after the upgrade: give it its first version before the base is recorded (design D7).
+            // After every refusal above, so a refused command writes nothing, and before the first file of the branch.
+            source = await ImageAdoption.AdoptAsync(_runtime, _engineName, session, image, source, record.CreatedAt, cancellationToken).ConfigureAwait(false);
+            state.Version = source.Id;
+            manifest = source.Manifest;
+        }
 
         // 2. The folder. 'mkdir' without -p, so a folder that was already there is never taken for this create's own.
         // The engine's shell runs as mssql (10001), which owns a folder it makes but may not give it to group 0: only
