@@ -50,7 +50,7 @@ Core pool, image and branch code, CLI metadata, status, on-pool metadata, JSON f
 - SqlBranch.Testing 0.2.x throws the same message, and its availability check returns false, so **tests that skip on that check silently stop running** after the upgrade. The release notes warn about this.
 - The upgrade cannot be undone. A pool that has not been upgraded keeps working with 0.2.2 and with this release.
 
-**Known limitation, not blocked.** 0.2.2 `image list` and `image export` do not read the credentials file, so they keep running on an upgraded pool. They see only the version the upgrade created while it is kept: once F4 adds newer versions they can list or export an older version than the current one, and they do not list images first built after the upgrade.
+**Known limitation, not blocked.** 0.2.2 `image list` and `image export` do not read the credentials file, so they keep running on an upgraded pool while the engine runs (with it stopped they report `engine_stopped`, as before). They see only the version the upgrade created while it is kept: once F4 adds newer versions they can list or export an older version than the current one, and they do not list images first built after the upgrade.
 
 **Behavior change on an upgraded pool.** A branch that is older than its image's last rebuild gets an unknown base, and a plain `branch reset` of it exits 1 `image_not_found` instead of resetting to whatever the image now holds. In this change the fix is to remove the branch and create it again; F4 adds `branch reset <name> --latest`.
 

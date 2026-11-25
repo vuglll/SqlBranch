@@ -133,6 +133,10 @@ When more than one environment error applies, a command SHALL report the first o
 - **THEN** the command exits with code 0, `branches.pinned` is ["dev1"] and `branches.unknownBase` is ["old1"]
 - **AND** `sqlbranch branch list --format json` shows `old1` with `imageVersion` null and `dev1` with `imageVersion` "shop@20261201T090000000Z"
 
+#### Scenario: Unreadable branch record
+- **WHEN** the pool uses format 1, the `branch.json` of branch `bad1` cannot be parsed, and the user runs `sqlbranch pool upgrade --yes`
+- **THEN** the command exits with code 0, the record of `bad1` is unchanged, and standard error has one warning naming `bad1` and `sqlbranch branch rm bad1` (maintainer decision D14)
+
 #### Scenario: Branch of a removed image
 - **WHEN** the pool uses format 1, branch `pr-9` was created from crm, crm was removed with `--force`, and the user runs `sqlbranch pool upgrade --yes --format json`
 - **THEN** the command exits with code 0 and `branches.removedBase` is ["pr-9"]
@@ -263,7 +267,11 @@ When a `branch create` or `branch reset` cannot take an image lock, it SHALL rea
 - **THEN** the command exits with code 0 and the engine container, shop, `dev1` and the pool are gone
 
 ### Requirement: Older clients stop on an upgraded pool
-On a pool that uses format 2 with the engine running, SqlBranch 0.2.2 commands that read the engine credentials (`init`, `engine start`, `status`, every `image build`, `image import`, `image rm`, and every `branch` command) MUST exit 1 with `error.code` "operation_failed" before changing any file, and SqlBranch.Testing 0.2.x create and reset MUST throw. With the engine stopped they report `engine_stopped` as before.
+On a pool that uses format 2 with the engine running, SqlBranch 0.2.2 commands that read the engine credentials (`init`, `engine start`, `status`, every `image build`, `image import`, `image rm`, and every `branch` command) MUST exit 1 with `error.code` "operation_failed" before changing any file, and SqlBranch.Testing 0.2.x create and reset MUST throw. With the engine stopped they report `engine_stopped` as before, except `init` and `engine start` (design D10).
+
+#### Scenario: Older client starts a stopped engine
+- **WHEN** the pool uses format 2, the engine is stopped, and the released 0.2.2 tool runs `sqlbranch engine start`
+- **THEN** it exits with code 1, `error.code` is "operation_failed", and the message is "The engine credentials file in <pool> is not valid.", because it reads the credentials file itself
 
 #### Scenario: Older client attempts forced removal
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, shop has branch `dev1`, and the released 0.2.2 tool runs `sqlbranch image rm shop --force`
