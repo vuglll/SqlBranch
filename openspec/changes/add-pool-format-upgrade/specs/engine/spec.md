@@ -191,7 +191,7 @@ No command SHALL move a pool from format 2 back to format 1. Running `pool upgra
 
 #### Scenario: Data untouched by the upgrade
 - **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1 with images shop and crm and branches `dev1` (with an open connection) and `old1`, and the user runs `sqlbranch pool upgrade --yes` and then `sqlbranch pool upgrade --yes` again
-- **THEN** both exit 0, and after each the SHA-256 and modification time of every image data file, every `manifest.json` and every branch data file are unchanged
+- **THEN** both exit 0, and after each the SHA-256 and modification time of every image data file, every `manifest.json` and every branch data file other than `dev1`'s are unchanged, and `dev1`'s data files (open, so the engine writes them in the background) keep their names and sizes
 - **AND** the engine container's start time from `docker inspect` is unchanged, the server logins are unchanged, and `dev1`'s open connection can commit a row
 
 ### Requirement: An interrupted upgrade blocks writes until it is rerun

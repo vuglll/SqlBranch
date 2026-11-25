@@ -255,6 +255,33 @@ public sealed class PoolAdoptionTests
     }
 
     [Fact]
+    public void Adoption_that_loses_the_shared_lock_after_publishing_says_so_and_creates_no_branch()
+    {
+        Format2("thin");
+        _pool.World.Connector.TrackSessionLocks = false;
+        _pool.AddImage("crm");
+        // Takes: 1 shared (create), 2 exclusive (adoption). Another command holds the image right after, so the shared retake fails.
+        var takes = 0;
+        _pool.World.Connector.OnTakeLock = taken =>
+        {
+            if (taken == EngineLocks.Image("crm") && ++takes == 2)
+            {
+                _pool.World.Connector.HeldLocks.Add(taken);
+            }
+        };
+
+        var run = Run("branch", "create", "dev7", "--from", "crm");
+
+        Assert.Equal(1, run.Exit);
+        Assert.Equal("catalog_busy", Code(run.Json));
+        var message = run.Json.GetProperty("error").GetProperty("message").GetString()!;
+        Assert.Contains("was adopted as", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Nothing was changed", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("dev7", _pool.Records.Keys);
+        Assert.Equal(["ids:crm", "catalog:crm"], _pool.Writes);
+    }
+
+    [Fact]
     public void Reset_of_a_legacy_branch_meets_a_busy_image_with_catalog_busy()
     {
         Format2("thin");
@@ -284,7 +311,7 @@ public sealed class PoolAdoptionTests
         Assert.Equal(0, Run("image", "list").Exit);
         Assert.Equal(0, Run("branch", "list").Exit);
         Assert.Equal(0, _pool.Run("branch", "conn", "dev1").Exit);
-        _ = _pool.Run("image", "export", "crm", "--to", "/work/crm.sbimg");
+        // image export of an unadopted image exits 0 without adopting: ImageExportTests.Image_export_of_an_unadopted_image_does_not_adopt_it.
         Assert.Equal(0, _pool.Run("status").Exit);
 
         Assert.Empty(_pool.Writes);

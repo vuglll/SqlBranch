@@ -46,7 +46,7 @@ public sealed class ImageExportTests : IDisposable
 
         _world.WithEngine();
         _world.Runtime.ExecHandler = (_, command) =>
-            command.Count >= 3 && command[2] == ImageCatalog.ListingScript
+            NoteScript(command) && command.Count >= 3 && command[2] == ImageCatalog.ListingScript
                 ? FakeContainerRuntime.Ok(string.Join('\n', new[]
                 {
                     _credentialsJson is null ? null : $"SQLBRANCH_POOLCRED|{System.Text.Json.JsonDocument.Parse(_credentialsJson).RootElement.GetProperty("format").GetInt32()}",
@@ -71,6 +71,25 @@ public sealed class ImageExportTests : IDisposable
             Assert.Equal(_manifest.ToJson(), reader.Head.Manifest.ToJson());
         }
         Assert.Equal(_credentialsJson, _world.Host.CredentialsJson);
+    }
+
+    private readonly List<string> _scripts = [];
+
+    private bool NoteScript(IReadOnlyList<string> command)
+    {
+        _scripts.Add(string.Join(' ', command));
+        return true;
+    }
+
+    [Fact]
+    public async Task Image_export_of_an_unadopted_image_does_not_adopt_it()
+    {
+        // A format-2 pool, an image with a manifest and no catalog (written by an older client after the upgrade).
+        _credentialsJson = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsJson;
+        var result = await Export(Dest());
+        Assert.Equal(2, result.Files);
+        Assert.DoesNotContain(_scripts, c => c.Contains("base64 -d >", StringComparison.Ordinal));
     }
 
     public void Dispose()

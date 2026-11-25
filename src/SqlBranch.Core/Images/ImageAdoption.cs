@@ -1,3 +1,4 @@
+using System.Text.Json;
 using SqlBranch.Core.Containers;
 using SqlBranch.Core.Engine;
 using SqlBranch.Core.Output;
@@ -42,6 +43,14 @@ internal static class ImageAdoption
         new(ErrorCodes.CatalogBusy,
             $"The image '{name}' changed while it was being adopted, so this command cannot use the version it read. Nothing was changed. Run the command again.");
 
+    /// <summary>The refusal when the image was adopted but the command lost the shared lock or saw the image differ afterwards.</summary>
+    private static SqlBranchException AdoptedButLost(string name, string id) =>
+        new(ErrorCodes.CatalogBusy,
+            $"The image '{name}' was adopted as {id}, but another command took it before this one could use it. Run the command again.");
+
+    private static bool Same(ImageVersionData a, ImageVersionData b) =>
+        a.Directory == b.Directory && JsonSerializer.Serialize(a.Manifest) == JsonSerializer.Serialize(b.Manifest);
+
     /// <summary>
     /// Adopts <paramref name="legacy"/> (an image read with a null ID). The command holds the image's shared lock, which is given
     /// back before the exclusive lock is tried without waiting; when another operation holds the image, nothing is changed and
@@ -63,7 +72,7 @@ internal static class ImageAdoption
         // Read again under the exclusive lock: another command may have adopted, replaced or removed the image since the first read.
         var current = await ImageCatalog.ReadVersionAsync(runtime, engineName, name, null, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
-        if (current.Directory != legacy.Directory || current.Manifest.BuiltAt != legacy.Manifest.BuiltAt)
+        if (!Same(current, legacy))
         {
             throw Changed(name);
         }
@@ -78,13 +87,13 @@ internal static class ImageAdoption
         await EngineLocks.ReleaseAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false);
         if (!await EngineLocks.TryTakeSharedAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false))
         {
-            throw Busy(name);
+            throw AdoptedButLost(name, id);
         }
 
         var again = await ImageCatalog.ReadVersionAsync(runtime, engineName, name, null, cancellationToken).ConfigureAwait(false);
-        if (again is null || again.Id != id || again.Directory != legacy.Directory || again.Manifest.BuiltAt != legacy.Manifest.BuiltAt)
+        if (again is null || again.Id != id || !Same(again, legacy))
         {
-            throw Changed(name);
+            throw AdoptedButLost(name, id);
         }
 
         return again;

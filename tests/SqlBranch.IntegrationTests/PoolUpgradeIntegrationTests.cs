@@ -193,6 +193,11 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         // "Upgrade twice" and "Global options are accepted": the rerun is a format-2 to format-2 no-op.
         var config = Path.Combine(fixture.ClientFolder, "ci.sqlbranch.yml");
         await File.WriteAllTextAsync(config, "requireThin: false\n");
+        // upold1 was brought online and offline again since the first snapshot (the engine writes its files on startup), so the rerun
+        // is compared with a fresh quiet snapshot taken with it offline.
+        await SetOfflineAsync("upold1", offline: true);
+        var beforeRerun = await QuietSnapshotAsync();
+        await SetOfflineAsync("upold1", offline: false);
         var rerun = Json(World.RunCli("pool", "upgrade", "--yes", "--quiet", "--config", config, "--format", "json"));
         Assert.Equal(2, rerun.GetProperty("pool").GetProperty("format").GetInt32());
         Assert.Equal(2, rerun.GetProperty("pool").GetProperty("previousFormat").GetInt32());
@@ -201,9 +206,9 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         Assert.Equal(0, rerunText.Exit);
         Assert.Contains("already uses format 2", rerunText.Out, StringComparison.Ordinal);
 
-        // ...and after the rerun, when only the status and list queries ran since the first snapshot.
+        // ...and after the rerun, against the quiet snapshot taken just before it.
         await SetOfflineAsync("upold1", offline: true);
-        Assert.Equal(before, await DataSnapshotAsync());
+        Assert.Equal(beforeRerun, await DataSnapshotAsync());
         await SetOfflineAsync("upold1", offline: false);
         Assert.Equal(recordsBefore, await BranchRecordsAsync());
         Assert.Equal(loginsBefore, await LoginsAsync());
