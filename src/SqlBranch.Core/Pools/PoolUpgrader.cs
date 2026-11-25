@@ -41,7 +41,7 @@ public sealed class PoolUpgrader
     private const string BranchTag = "SQLBRANCH_UPBRANCH|";
 
     /// <summary>
-    /// The existing images (a manifest or a catalog) and branches (a <c>branch.json</c>), one tagged line each. The globs skip
+    /// The existing images (a manifest or a catalog) and branch folders (with or without a <c>branch.json</c>: a create still running has made the folder and writes the record late), one tagged line each. The globs skip
     /// folders that start with a dot (<c>.removing-*</c>, <c>.ids</c>), and an image folder a build is still sealing has no
     /// manifest yet, so it is skipped too, as the 0.2.2 image listing does. An image line carries whether the manifest
     /// exists, the catalog as base64 (or <c>none</c>) and the high-water mark file (or <c>none</c>).
@@ -52,7 +52,7 @@ public sealed class PoolUpgrader
         "if [ $m = 0 ] && [ \"$c\" = none ]; then continue; fi; " +
         "i=none; if [ -f \"/pool/images/.ids/$n\" ]; then i=$(cat \"/pool/images/.ids/$n\"); fi; " +
         "echo \"SQLBRANCH_UPIMAGE|$n|$m|$c|$i\"; done; " +
-        "for d in /pool/branches/*/; do [ -f \"${d}branch.json\" ] && echo \"SQLBRANCH_UPBRANCH|$(basename \"$d\")\"; done; true";
+        "for d in /pool/branches/*/; do [ -d \"$d\" ] && echo \"SQLBRANCH_UPBRANCH|$(basename \"$d\")\"; done; true";
 
     private readonly IContainerRuntime _runtime;
     private readonly IEngineConnector _connector;
@@ -87,7 +87,7 @@ public sealed class PoolUpgrader
     /// Upgrades the pool, or finishes an upgrade that did not finish. <paramref name="progress"/> gets one line at a time for
     /// standard error: the warning first, then progress while waiting for locks. The engine must be running; the caller has checked that.
     /// </summary>
-    public async Task<PoolUpgradeResult> UpgradeAsync(FoundPool pool, int fallbackPort, Action<string>? progress, CancellationToken cancellationToken, TimeSpan? publishWait = null)
+    public async Task<PoolUpgradeResult> UpgradeAsync(FoundPool pool, int fallbackPort, Action<string>? progress, TimeSpan publishWait, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pool);
         var image = ImageCatalog.RequireRunningEngine(pool).Image;
@@ -124,7 +124,7 @@ public sealed class PoolUpgrader
 
         // Step 2. Freeze the names before waiting; retain acquired locks until the session closes.
         var found = await EnumerateAsync(cancellationToken).ConfigureAwait(false);
-        await LockAsync(session, found, publishWait ?? TimeSpan.FromMinutes(10), progress, cancellationToken).ConfigureAwait(false);
+        await LockAsync(session, found, publishWait, progress, cancellationToken).ConfigureAwait(false);
 
         // Step 3. Steps 3 and 4 process exactly the names locked above.
         var images = new List<UpgradedImage>();
@@ -139,7 +139,7 @@ public sealed class PoolUpgrader
         }
 
         // Step 4. Read and bind only the locked branch records.
-        var branches = await BindBranchesAsync(engine, found.Branches, images, cancellationToken).ConfigureAwait(false);
+        var branches = await BindBranchesAsync(engine, found.Branches, images, progress, cancellationToken).ConfigureAwait(false);
 
         // Step 5.
         await EngineCredentials.WriteFileAsync(_runtime, image, pool.Location,
@@ -180,6 +180,8 @@ public sealed class PoolUpgrader
         var pending = found.Images.Select(i => (Resource: EngineLocks.Image(i.Name), Label: $"image '{i.Name}'"))
             .Concat(found.Branches.Select(b => (Resource: EngineLocks.Branch(b), Label: $"branch '{b}'"))).ToList();
         var start = _clock.GetTimestamp();
+        string? lastBusy = null;
+        var lastPrinted = start;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -205,13 +207,19 @@ public sealed class PoolUpgrader
                     "Commands that change images or branches are refused until the upgrade finishes. Run 'sqlbranch pool upgrade --yes' again once they finish.");
             }
 
-            progress?.Invoke($"Waiting for {busy} before upgrading the pool.");
+            if (busy != lastBusy || _clock.GetElapsedTime(lastPrinted) >= TimeSpan.FromSeconds(30))
+            {
+                progress?.Invoke($"Waiting for {busy} before upgrading the pool.");
+                lastBusy = busy;
+                lastPrinted = _clock.GetTimestamp();
+            }
+
             await _delay(remaining < TimeSpan.FromSeconds(1) ? remaining : TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
         }
     }
 
     private async Task<UpgradedBranches> BindBranchesAsync(BranchEngine engine, IReadOnlyList<string> names,
-        IReadOnlyList<UpgradedImage> images, CancellationToken cancellationToken)
+        IReadOnlyList<UpgradedImage> images, Action<string>? progress, CancellationToken cancellationToken)
     {
         var pinned = new List<string>();
         var unknown = new List<string>();
@@ -225,10 +233,12 @@ public sealed class PoolUpgrader
                 continue;
             }
 
+            // An unreadable record is left as it is (design D14): writing a base into it could destroy what is left of it.
             if (record is null || NameRules.Problem(record.Image, forBranch: false) is not null)
             {
-                throw new SqlBranchException(ErrorCodes.OperationFailed,
-                    $"The record of branch '{name}' ({BranchPaths.Json(name)}) cannot be read. Repair it and run 'sqlbranch pool upgrade --yes' again.");
+                progress?.Invoke($"warning: The record of branch '{name}' ({BranchPaths.Json(name)}) cannot be read, so the upgrade left it as it is. " +
+                    $"Run 'sqlbranch branch rm {name}' to remove the branch.");
+                continue;
             }
 
             if (record.BaseKnown is null)
@@ -246,11 +256,7 @@ public sealed class PoolUpgrader
                     record = record with { BaseKnown = known, ImageVersion = known ? image.Version : null };
                 }
 
-                var directory = Quoting.Shell(BranchPaths.Branch(name));
-                var target = Quoting.Shell(BranchPaths.Json(name));
-                var temporary = Quoting.Shell(BranchPaths.Json(name) + ".new");
-                var encoded = Quoting.Shell(Convert.ToBase64String(Encoding.UTF8.GetBytes(record.ToJson())));
-                await WriteAsync($"printf %s {encoded} | base64 -d > {temporary} && sync {temporary} && mv -f {temporary} {target} && {{ sync {directory} || true; }}",
+                await WriteAsync($"{BranchEngine.RecordWriteScript(name, record)} && {{ sync {Quoting.Shell(BranchPaths.Branch(name))} || true; }}",
                     $"writing the base of branch '{name}'", cancellationToken).ConfigureAwait(false);
             }
 

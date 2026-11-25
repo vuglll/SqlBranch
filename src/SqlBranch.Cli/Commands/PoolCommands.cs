@@ -81,7 +81,7 @@ internal static class PoolCommands
         ImageCatalog.RequireRunningEngine(context.Pool);
 
         var result = new PoolUpgrader(services.Runtime, services.Connector, redactor, services.EngineName, services.Clock, services.UpgradeDelay)
-            .UpgradeAsync(context.Pool, context.Settings.Port, progress, CancellationToken.None, context.Settings.PublishWait).GetAwaiter().GetResult();
+            .UpgradeAsync(context.Pool, context.Settings.Port, progress, context.Settings.PublishWait, CancellationToken.None).GetAwaiter().GetResult();
         return Describe(result);
     }
 

@@ -79,6 +79,29 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
     }
 
     [IntegrationFact]
+    public async Task The_enumeration_script_lists_images_and_branch_folders_and_skips_dot_folders_and_build_staging()
+    {
+        var script = SqlBranch.Core.Pools.PoolUpgrader.EnumerationScript;
+        const string Setup =
+            "mkdir -p /pool/images/enumx /pool/images/enumx-seal /pool/images/.removing-enumx /pool/images/.ids /pool/build/enumxid /pool/branches/enumxb /pool/branches/.enumx-dot && " +
+            "echo '{}' > /pool/images/enumx/manifest.json && echo '{}' > /pool/images/.removing-enumx/manifest.json && " +
+            "printf %s enumx@20261201T090000000Z > /pool/images/.ids/enumx && printf %s enumx > /pool/images/.ids/enumx-seal";
+        const string Cleanup =
+            "rm -rf /pool/images/enumx /pool/images/enumx-seal /pool/images/.removing-enumx /pool/images/.ids/enumx /pool/images/.ids/enumx-seal /pool/build/enumxid /pool/branches/enumxb /pool/branches/.enumx-dot";
+        await Kit.InPoolAsync(Setup);
+        try
+        {
+            var lines = (await Kit.InPoolAsync(script)).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(l => l.Contains("enumx", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(["SQLBRANCH_UPIMAGE|enumx|1|none|enumx@20261201T090000000Z", "SQLBRANCH_UPBRANCH|enumxb"], lines);
+        }
+        finally
+        {
+            await Kit.InPoolAsync(Cleanup);
+        }
+    }
+
+    [IntegrationFact]
     public async Task A_format_1_pool_with_images_and_branches_upgrades_without_touching_data_and_reports_format_2()
     {
         await Kit.EnsureImageAsync("upshop");

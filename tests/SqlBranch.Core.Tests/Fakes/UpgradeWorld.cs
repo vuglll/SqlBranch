@@ -33,7 +33,7 @@ internal sealed partial class UpgradeWorld
                 Writes.Add("enumerate");
                 var lines = Images.Values.Where(i => !i.Name.StartsWith('.') && !i.Name.Contains('/') && (i.HasManifest || i.CatalogBase64 is not null)).OrderBy(i => i.Name, StringComparer.Ordinal).Select(i =>
                         $"SQLBRANCH_UPIMAGE|{i.Name}|{(i.HasManifest ? 1 : 0)}|{i.CatalogBase64 ?? "none"}|{i.IdFile ?? "none"}")
-                    .Concat(Branches.Where(b => !b.StartsWith('.') && Records.ContainsKey(b)).Order(StringComparer.Ordinal).Select(b => $"SQLBRANCH_UPBRANCH|{b}"));
+                    .Concat(Branches.Where(b => !b.StartsWith('.')).Order(StringComparer.Ordinal).Select(b => $"SQLBRANCH_UPBRANCH|{b}"));
                 return FakeContainerRuntime.Ok(string.Join('\n', lines) + "\n");
             }
 
@@ -105,6 +105,20 @@ internal sealed partial class UpgradeWorld
         var run = World.Runtime.RunHandler;
         World.Runtime.RunHandler = spec =>
         {
+            var credentialsWrite = spec.Stdin is not null && FakeContainerRuntime.ScriptOf(spec).Contains("credentials.json.new", StringComparison.Ordinal);
+            if (credentialsWrite && !_inCredentialsHook && OnCredentialsWrite is { } hook)
+            {
+                _inCredentialsHook = true;
+                try
+                {
+                    hook();
+                }
+                finally
+                {
+                    _inCredentialsHook = false;
+                }
+            }
+
             var result = run(spec);
             if (spec.Stdin is { } json && FakeContainerRuntime.ScriptOf(spec).Contains("credentials.json.new", StringComparison.Ordinal))
             {
@@ -119,11 +133,15 @@ internal sealed partial class UpgradeWorld
 
     public CliWorld World { get; }
 
+    private bool _inCredentialsHook;
+
+    /// <summary>Runs just before the upgrade writes a temporary credentials file, while the upgrade is paused in that write.</summary>
+    public Action? OnCredentialsWrite { get; set; }
+
     /// <summary>An image folder as the enumeration sees it.</summary>
     public sealed record FakeImage(string Name, bool HasManifest, string? CatalogBase64, string? IdFile)
     {
         public DateTimeOffset BuiltAt { get; init; } = new(2026, 11, 16, 10, 30, 0, TimeSpan.Zero);
-        public DateTimeOffset ModifiedAt { get; init; } = new(2026, 11, 30, 10, 30, 0, TimeSpan.Zero);
     }
 
     public Dictionary<string, FakeImage> Images { get; } = [];

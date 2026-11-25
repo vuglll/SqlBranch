@@ -44,13 +44,14 @@ public sealed class PoolUpgradeBindingWaitTests
         [.. json.GetProperty("branches").GetProperty(kind).EnumerateArray().Select(n => n.GetString()!)];
 
     // Feed the actual upgraded record and catalog into the existing database fake, then exercise real list/reset paths.
-    private void CheckListAndReset(string name, bool removed, string? version, bool reset)
+    private void CheckListAndReset(string name, bool removed, string? version, bool reset, string image = "shop")
     {
         var branch = new BranchWorld();
         branch.UseFormat2(null);
-        branch.Catalog = _pool.CatalogOf("shop");
-        branch.ImageExists = _pool.Images.ContainsKey("shop");
-        branch.AddBranch(name);
+        branch.Catalog = _pool.CatalogOf(image);
+        branch.ImageExists = _pool.Images.ContainsKey(image);
+        branch.ImageName = image;
+        branch.AddBranch(name, image);
         branch.Records[name] = _pool.Records[name];
         var list = branch.Run("branch", "list", "--format", "json");
         Assert.Equal(0, list.Exit);
@@ -77,12 +78,16 @@ public sealed class PoolUpgradeBindingWaitTests
     public void Branch_older_than_its_image_has_an_unknown_base_and_list_and_reset_respect_it()
     {
         _pool.AddImage("shop");
-        _pool.AddBranch("old1", createdAt: Start.AddMonths(-1));
+        _pool.Images["shop"] = _pool.Images["shop"] with { BuiltAt = new DateTimeOffset(2026, 11, 20, 10, 0, 0, TimeSpan.Zero) };
+        _pool.AddBranch("old1", createdAt: new DateTimeOffset(2026, 11, 18, 10, 0, 0, TimeSpan.Zero));
+        _pool.AddBranch("dev1", createdAt: new DateTimeOffset(2026, 11, 21, 10, 0, 0, TimeSpan.Zero));
         var run = Upgrade();
         Assert.Equal(0, run.Exit);
+        Assert.Equal(["dev1"], Names(run.Json, "pinned"));
         Assert.Equal(["old1"], Names(run.Json, "unknownBase"));
         Assert.False(Record("old1").BaseKnown);
         CheckListAndReset("old1", false, null, false);
+        CheckListAndReset("dev1", false, "shop@20261201T090000000Z", true);
     }
 
     [Fact]
@@ -108,27 +113,22 @@ public sealed class PoolUpgradeBindingWaitTests
     [InlineData(true)]
     public void Imported_image_with_older_builtAt_pins_even_when_it_replaced_a_force_removed_image(bool replaced)
     {
-        _pool.AddImage("shop");
-        _pool.Images["shop"] = _pool.Images["shop"] with
-        {
-            BuiltAt = new DateTimeOffset(2026, 11, 11, 10, 0, 0, TimeSpan.Zero),
-            ModifiedAt = new DateTimeOffset(2026, 11, 15, 10, 0, 0, TimeSpan.Zero)
-        };
+        _pool.AddImage("crm");
+        _pool.Images["crm"] = _pool.Images["crm"] with { BuiltAt = new DateTimeOffset(2026, 11, 11, 10, 0, 0, TimeSpan.Zero) };
         // Replacement: branch predates the local import. Ordinary import: branch follows it.
-        _pool.AddBranch("pr-3", createdAt: new DateTimeOffset(2026, 11, replaced ? 12 : 16, 10, 0, 0, TimeSpan.Zero));
+        _pool.AddBranch("pr-3", "crm", createdAt: new DateTimeOffset(2026, 11, replaced ? 12 : 16, 10, 0, 0, TimeSpan.Zero));
         var run = Upgrade();
         Assert.Equal(0, run.Exit);
         Assert.Equal(["pr-3"], Names(run.Json, "pinned"));
         Assert.Empty(Names(run.Json, "removedBase"));
-        CheckListAndReset("pr-3", false, "shop@20261201T090000000Z", true);
+        CheckListAndReset("pr-3", false, "crm@20261201T090000000Z", true, "crm");
     }
 
     [Fact]
-    public void Manifest_modification_time_later_than_builtAt_does_not_prevent_pinning_at_equal_createdAt()
+    public void A_branch_created_at_exactly_builtAt_is_pinned_and_no_file_time_is_read()
     {
         _pool.AddImage("shop");
         _pool.AddBranch("dev1", createdAt: _pool.Images["shop"].BuiltAt);
-        Assert.True(_pool.Images["shop"].ModifiedAt > Record("dev1").CreatedAt);
         var run = Upgrade();
         Assert.Equal(0, run.Exit);
         Assert.Equal(["dev1"], Names(run.Json, "pinned"));
@@ -184,7 +184,9 @@ public sealed class PoolUpgradeBindingWaitTests
     public void Branch_create_still_running_times_out_at_ten_minutes_naming_shop_and_dev4()
     {
         _pool.AddImage("shop");
+        // The create has made the folder of dev4 but writes branch.json late, so there is no record yet.
         _pool.AddBranch("dev4");
+        _pool.Records.Remove("dev4");
         _pool.World.Connector.HeldLocks.UnionWith([EngineLocks.Image("shop"), EngineLocks.Branch("dev4")]);
         var run = Upgrade();
         Assert.Equal(1, run.Exit);
@@ -195,7 +197,9 @@ public sealed class PoolUpgradeBindingWaitTests
         Assert.Contains("dev4", message, StringComparison.Ordinal);
         Assert.Contains("sqlbranch pool upgrade --yes", message, StringComparison.Ordinal);
         Assert.Contains("Waiting for image 'shop', branch 'dev4'", run.Err, StringComparison.Ordinal);
-        Assert.Equal(1, _pool.Run("status", "--format", "json").Exit);
+        var status = _pool.Run("status", "--format", "json");
+        Assert.Equal(1, status.Exit);
+        Assert.Contains("The pool upgrade did not finish", status.Out, StringComparison.Ordinal);
         Assert.All(_pool.World.Connector.Statements.Where(s => s.Contains("sp_getapplock", StringComparison.Ordinal)), s => Assert.Contains("@LockTimeout = 0", s, StringComparison.Ordinal));
     }
 
@@ -233,14 +237,16 @@ public sealed class PoolUpgradeBindingWaitTests
     [InlineData(true)]
     public void Upgrade_still_running_and_its_temporary_credentials_are_in_progress(bool temporary)
     {
-        _pool.AddBranch("dev1");
-        _pool.World.Connector.HeldLocks.Add(EngineLocks.Branch("dev1"));
-        _duringWait = () =>
+        var checks = 0;
+        void CheckStatus()
         {
+            checks++;
             if (temporary)
             {
                 _pool.World.Host.UpgradeTemporaryFiles.Add("credentials.json.new");
             }
+
+            var probesBefore = _pool.World.Connector.ProbedLocks.Count;
             var status = _pool.Run("status", "--format", "json");
             Assert.Equal(0, status.Exit);
             var json = JsonDocument.Parse(status.Out).RootElement;
@@ -249,10 +255,34 @@ public sealed class PoolUpgradeBindingWaitTests
             if (temporary)
             {
                 Assert.Contains("credentials.json.new", status.Out, StringComparison.Ordinal);
+                _pool.World.Host.UpgradeTemporaryFiles.Clear();
             }
-            _pool.World.Connector.HeldLocks.Remove(EngineLocks.Branch("dev1"));
-        };
+
+            // Status looked at the upgrade lock and never took it: only the upgrade itself holds it.
+            Assert.Contains(EngineLocks.PoolUpgrade, _pool.World.Connector.ProbedLocks.Skip(probesBefore));
+            Assert.Equal(1, _pool.World.Connector.TakenLocks.Count(l => l == EngineLocks.PoolUpgrade));
+        }
+
+        if (temporary)
+        {
+            // Paused in the write of the temporary credentials file, not in a lock wait.
+            _pool.AddBranch("dev1");
+            _pool.World.Connector.HeldLocks.Clear();
+            _pool.OnCredentialsWrite = CheckStatus;
+        }
+        else
+        {
+            _pool.AddBranch("dev1");
+            _pool.World.Connector.HeldLocks.Add(EngineLocks.Branch("dev1"));
+            _duringWait = () =>
+            {
+                CheckStatus();
+                _pool.World.Connector.HeldLocks.Remove(EngineLocks.Branch("dev1"));
+            };
+        }
+
         Assert.Equal(0, Upgrade().Exit);
+        Assert.True(checks >= 1);
     }
 
     [Fact]
@@ -339,6 +369,42 @@ public sealed class PoolUpgradeBindingWaitTests
         Assert.Equal("shop", Assert.Single(run.Json.GetProperty("images").EnumerateArray()).GetProperty("name").GetString());
         Assert.DoesNotContain("branch:removed", _pool.Writes);
         Assert.DoesNotContain("catalog:gone", _pool.Writes);
+    }
+
+    [Fact]
+    public void An_unreadable_branch_record_is_left_alone_with_a_warning_and_the_upgrade_finishes()
+    {
+        _pool.AddImage("shop");
+        _pool.AddBranch("dev1");
+        _pool.AddBranch("broken");
+        _pool.Records["broken"] = "{ not json";
+        _pool.AddBranch("badimage");
+        _pool.Records["badimage"] = Record("dev1").ToJson().Replace("\"shop\"", "\"Bad Name\"", StringComparison.Ordinal);
+        var badimage = _pool.Records["badimage"];
+        var run = Upgrade();
+        Assert.Equal(0, run.Exit);
+        Assert.Equal(["dev1"], Names(run.Json, "pinned"));
+        Assert.Equal("{ not json", _pool.Records["broken"]);
+        Assert.Equal(badimage, _pool.Records["badimage"]);
+        Assert.DoesNotContain("branch:broken", _pool.Writes);
+        Assert.DoesNotContain("branch:badimage", _pool.Writes);
+        Assert.Contains("branch 'broken'", run.Err, StringComparison.Ordinal);
+        Assert.Contains("sqlbranch branch rm broken", run.Err, StringComparison.Ordinal);
+        Assert.Contains("sqlbranch branch rm badimage", run.Err, StringComparison.Ordinal);
+        Assert.Equal(0, _pool.Run("status", "--format", "json").Exit);
+        Assert.Contains("credentials:done", _pool.Writes);
+    }
+
+    [Fact]
+    public void Wait_progress_is_printed_when_the_busy_set_changes_not_every_second()
+    {
+        _pool.AddImage("shop");
+        _pool.AddBranch("dev1");
+        _pool.World.Connector.HeldLocks.UnionWith([EngineLocks.Image("shop"), EngineLocks.Branch("dev1")]);
+        var run = Upgrade();
+        Assert.Equal(1, run.Exit);
+        var waiting = run.Err.Split('\n').Count(l => l.StartsWith("Waiting for", StringComparison.Ordinal));
+        Assert.InRange(waiting, 2, 25);
     }
 
     [Fact]
