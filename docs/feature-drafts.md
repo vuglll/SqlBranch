@@ -178,8 +178,8 @@ data ready at 9 am.
   plus the full nightly recipe: build from a cloud backup, run masking
   scripts, export to shared storage.
 
-**Needs first.** 0.1 archived; F4a `add-pool-format-upgrade` archived (since
-2026-11-24). The nightly recipe also uses `add-cloud-backup-source` and
+**Needs first.** 0.1 archived; F4a `add-pool-format-upgrade` archived
+(2026-11-28). The nightly recipe also uses `add-cloud-backup-source` and
 `add-image-export-import`.
 
 **Spec note.** One existing requirement changes for backup and scripts builds: building with the name

@@ -6,7 +6,7 @@ re-checked against the current repository (version 0.2.2 in `Directory.Build.pro
 initial release). Docker is available on the maintainer's Linux machine, and
 the platform spikes run as the first task group of `add-image-refresh` after
 the change is approved. `add-image-refresh` now depends on
-`add-pool-format-upgrade` (split out 2026-11-24), which must be archived first.
+`add-pool-format-upgrade` (split out 2026-11-24), archived 2026-11-28.
 
 ## Prerequisites (checked 2026-11-24 against docs/roadmap.md)
 
@@ -17,7 +17,7 @@ the change is approved. `add-image-refresh` now depends on
 - F2 `add-bacpac-source`: archived 2026-11-20
   (`openspec/changes/archive/2026-11-20-add-bacpac-source`).
 - F4 needs "0.1 archived", met 2026-11-17, and since 2026-11-24
-  `add-pool-format-upgrade` archived, which is not met yet. F4 has no spike
+  `add-pool-format-upgrade` archived, met 2026-11-28. F4 has no spike
   gate.
 - The follow-up draft `add-bacpac-replacement` in `docs/feature-drafts.md`
   needs "F2 archived and F4 version publication available". F2 is archived, so
