@@ -300,3 +300,44 @@ Second run, same date, after the walk was split per clone mode: medians of 20 cr
 | `plain` | thin | 2146 ms | 2283 ms |
 
 The largest slowdown is 6.7%, under the 10% flag.
+
+## Task 6.1: the integration suite on a format-2 pool
+
+The switch is `SQLBRANCH_IT_POOL_FORMAT=1|2` (default 1). With 2, each
+engine fixture runs `sqlbranch pool upgrade --yes` right after `init` and
+checks that `status --format json` reports `poolFormat` 2. See
+[EngineWorld.cs](../../tests/SqlBranch.IntegrationTests/EngineWorld.cs).
+
+Full suite results, Release build, on Docker Desktop (Mac), image
+`ubuntu:24.04`:
+
+- format 1, loop-xfs: 174 passed, 5 skipped, 0 failed (1 h 4 m).
+- format 1, plain: 152 passed, 27 skipped, 0 failed (48 m).
+- format 2, loop-xfs: 168 passed, 8 skipped, 3 failed (1 h 23 m).
+- format 2, plain: 149 passed, 30 skipped, 0 failed (48 m), run after the
+  fix below. The 30 are plain's usual 27 and the 3 format-2 skips.
+
+The three failures were test expectations written for the format-1 table,
+not product faults. The branch-list check in thin and copy expected
+`listimg (removed)`. Format 2 shows the version ID,
+`listimg@<id> (removed)`, as the change's `specs/branches` requires. The
+image-list check expected the row to end with the BRANCHES count. Format 2
+adds the VERSION column after it. These expectations were fixed in commit
+34ac4d7. The three tests then passed on both formats and both pools (the
+thin one skips on plain as always).
+
+These tests skip under format 2 because they need a format-1 starting pool:
+
+- `PoolUpgradeIntegrationTests.A_format_1_pool_with_images_and_branches_upgrades_without_touching_data_and_reports_format_2`
+  in `tests/SqlBranch.IntegrationTests/PoolUpgradeIntegrationTests.cs`.
+- `PoolFormatRecheck{Thin,Copy}IntegrationTests.Walk_other_commands_do_not_upgrade_then_throughput_then_list_and_export_on_format_2`
+  in `tests/SqlBranch.IntegrationTests/PoolFormatRecheckIntegrationTests.cs`.
+  This covers both `PoolFormatRecheckThinIntegrationTests` and
+  `PoolFormatRecheckCopyIntegrationTests`.
+
+`Teardown_during_an_unfinished_upgrade` in
+`tests/SqlBranch.IntegrationTests/PoolUpgradeTeardownIntegrationTests.cs`
+and the fresh import pool in `PoolFormatRecheckIntegrationTests.cs` keep
+their own format-1 pool on purpose. The branch and image leftover checks in
+`BranchDocsIntegrationTests.cs` and `ImageDocsIntegrationTests.cs` ignore
+the `.ids` folder, which format 2 adds.
