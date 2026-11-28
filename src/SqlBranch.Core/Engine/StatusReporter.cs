@@ -34,6 +34,9 @@ public sealed record StatusReport(
     IReadOnlyList<string> InProgress)
 {
     public IReadOnlyList<string> ExpiredBranches { get; init; } = [];
+
+    /// <summary>The pool format: 1, or 2 after <c>pool upgrade</c> (design D2).</summary>
+    public int PoolFormat { get; init; } = 1;
 }
 
 /// <summary>
@@ -65,6 +68,7 @@ public sealed class StatusReporter
         "record=; [ $b = 1 ] && record=$(base64 -w0 \"${d}branch.json\"); echo \"SQLBRANCH_BRANCH|$(basename \"$d\")|$b|$x|$record\"; done; " +
         "for d in /pool/images/*/; do [ -d \"$d\" ] || continue; [ -f \"${d}manifest.json\" ] && echo \"SQLBRANCH_IMAGE|$(basename \"$d\")\"; done; " +
         "for d in /pool/images/.removing-*/; do [ -d \"$d\" ] || continue; echo \"SQLBRANCH_REMOVING|$(basename \"$d\")\"; done; " +
+        UpgradeTemporaryFiles.ListingScript +
         "for d in /pool/build/*/; do [ -d \"$d\" ] || continue; echo \"SQLBRANCH_BUILD|$(basename \"$d\")\"; done; " +
         BuildCredentials.ListMarkersLoop + "; " +
         "echo \"SQLBRANCH_SPACE|$(df -B1 --output=size,used,avail /pool | tail -n 1)\"";
@@ -94,9 +98,10 @@ public sealed class StatusReporter
         ArgumentNullException.ThrowIfNull(pool);
         var engine = pool.Engine ?? throw new ArgumentException("The pool has no engine.", nameof(pool));
 
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         var port = EngineStarter.PortOf(engine, fallbackPort);
@@ -108,8 +113,16 @@ public sealed class StatusReporter
         var mode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName).ConfigureAwait(false);
 
         var mismatches = new List<StatusMismatch>();
+        if (credentials.Format >= 2)
+        {
+            var images = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
+            mismatches.AddRange(images.Images.Where(i => i.CatalogReadable == false)
+                .Select(i => new StatusMismatch("image_catalog", i.Name, ImageCatalog.InvalidCatalog(i.Name).Message)));
+        }
+
         var inProgress = new List<string>();
         await FindMismatchesAsync(session, databases, listing, mismatches, inProgress, cancellationToken).ConfigureAwait(false);
+        await FindUpgradeAsync(session, credentials, listing, mismatches, inProgress, cancellationToken).ConfigureAwait(false);
 
         foreach (var scratch in BacpacScratch.FindAbandoned(engine.Id))
         {
@@ -120,7 +133,44 @@ public sealed class StatusReporter
         var now = _clock.GetUtcNow();
         return new StatusReport(version, edition, port, _engineName, pool, mode, listing.Images.Count,
             listing.Branches.Count(b => b.HasBranchJson), listing.Space, mismatches, inProgress)
-        { ExpiredBranches = listing.Branches.Where(b => b.ExpiresAt < now).Select(b => b.Name).Order(StringComparer.Ordinal).ToArray() };
+        {
+            ExpiredBranches = listing.Branches.Where(b => b.ExpiresAt < now).Select(b => b.Name).Order(StringComparer.Ordinal).ToArray(),
+            PoolFormat = credentials.Format,
+        };
+    }
+
+    /// <summary>
+    /// An upgrade that did not finish, and the temporary credentials file it may have left (design D2, D11). The upgrade
+    /// lock is only tested with <c>APPLOCK_TEST</c>: held means the upgrade is running, and its temporary file belongs to it.
+    /// </summary>
+    private static async Task FindUpgradeAsync(
+        IEngineSession session, CredentialsFile credentials, Listing listing, List<StatusMismatch> mismatches, List<string> inProgress, CancellationToken cancellationToken)
+    {
+        var unfinished = credentials.Format >= 2 && credentials.Upgrade?.State == UpgradeRecord.Running;
+        var files = listing.UpgradeTemporaryFiles.Where(f => UpgradeTemporaryFiles.IsUpgradeFile(f, unfinished)).ToArray();
+        if (!unfinished && files.Length == 0)
+        {
+            return;
+        }
+
+        if (await EngineLocks.IsHeldWithoutTakingAsync(session, EngineLocks.PoolUpgrade, cancellationToken).ConfigureAwait(false))
+        {
+            inProgress.Add("pool upgrade is running");
+            inProgress.AddRange(files.Select(f => $"pool upgrade temporary file {f}"));
+            return;
+        }
+
+        if (unfinished)
+        {
+            mismatches.Add(new StatusMismatch("pool_upgrade", "pool upgrade",
+                "The pool upgrade did not finish. Commands that change images or branches are refused until it finishes. Run 'sqlbranch pool upgrade --yes' to finish it."));
+        }
+
+        foreach (var file in files)
+        {
+            mismatches.Add(new StatusMismatch("upgrade_leftover", file,
+                $"The temporary file {file} was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it."));
+        }
     }
 
     private static async Task FindMismatchesAsync(
@@ -298,6 +348,7 @@ public sealed class StatusReporter
         IReadOnlyList<string> Images,
         IReadOnlyList<string> Removing,
         IReadOnlyList<string> Builds,
+        IReadOnlyList<string> UpgradeTemporaryFiles,
         IReadOnlyList<(string BuildId, CredentialMarker Marker)> Credentials,
         PoolSpace Space);
 
@@ -313,6 +364,7 @@ public sealed class StatusReporter
         var images = new List<string>();
         var removing = new List<string>();
         var builds = new List<string>();
+        var upgradeFiles = new List<string>();
         PoolSpace? space = null;
         var credentials = BuildCredentials.ParseMarkers(result.StdOut);
 
@@ -336,6 +388,9 @@ public sealed class StatusReporter
                 case "SQLBRANCH_REMOVING" when parts.Length >= 2:
                     removing.Add(parts[1]);
                     break;
+                case "SQLBRANCH_UPGRADETEMP" when parts.Length >= 2:
+                    upgradeFiles.Add(parts[1]);
+                    break;
                 case "SQLBRANCH_BUILD" when parts.Length >= 2:
                     builds.Add(parts[1]);
                     break;
@@ -347,7 +402,7 @@ public sealed class StatusReporter
             }
         }
 
-        return new Listing(branches, images, removing, builds, credentials,
+        return new Listing(branches, images, removing, builds, upgradeFiles, credentials,
             space ?? throw new SqlBranchException(ErrorCodes.OperationFailed, "Could not read the pool's free space."));
     }
 

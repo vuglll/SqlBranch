@@ -5,6 +5,7 @@ using SqlBranch.Core.Containers;
 using SqlBranch.Core.Engine;
 using SqlBranch.Core.Images;
 using SqlBranch.Core.Pools;
+using SqlBranch.Core.Output;
 using SqlBranch.Core.Secrets;
 
 namespace SqlBranch.Testing;
@@ -37,7 +38,13 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
         {
             var (pool, settings) = await DiscoverAsync(null, ct).ConfigureAwait(false);
             await using var engine = await BranchEngine.OpenAsync(runtime, connector, redactor, engineName, pool, settings.Port, ct).ConfigureAwait(false);
+            await engine.RequireWritableAsync(ct).ConfigureAwait(false);
             return true;
+        }
+        catch (SqlBranchException ex) when (ex.Code == ErrorCodes.PoolUpgradeRequired)
+        {
+            WriteLog(ex.Message);
+            return false;
         }
         catch (Exception) when (!ct.IsCancellationRequested) { return false; }
     }
@@ -78,7 +85,7 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
     }
 
     internal Task ResetAsync(FoundPool pool, Settings settings, string name, CancellationToken ct) =>
-        new BranchResetter(runtime, connector, redactor, engineName).ResetAsync(pool, settings.Port, name, ct, settings.RequireThin);
+        new BranchResetter(runtime, connector, redactor, engineName, time: clock).ResetAsync(pool, settings.Port, name, ct, settings.RequireThin);
 
     internal Task RemoveAsync(FoundPool pool, Settings settings, string name) =>
         new BranchRemover(runtime, connector, redactor, engineName).RemoveAsync(pool, settings.Port, name, CancellationToken.None);
@@ -89,6 +96,11 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
         catch (Exception) { /* A user log sink must not prevent cleanup. */ }
     }
 
+    /// <summary>
+    /// Turns a failure into the exception a test sees. The image is given for a create only. A reset passes none, so
+    /// <c>image_not_found</c> on a reset keeps the resetter's own text (create a new branch): rebuilding the image would not
+    /// restore the branch's old base (design D5).
+    /// </summary>
     internal Exception Failure(Exception ex, string? image = null)
     {
         var message = redactor.Redact(ex.Message);
@@ -98,6 +110,7 @@ internal sealed class FixtureHost(IContainerRuntime runtime, IEngineConnector co
             {
                 "not_initialized" => "sqlbranch init",
                 "engine_stopped" => "sqlbranch engine start",
+                "pool_upgrade_required" => "sqlbranch pool upgrade --yes",
                 "image_not_found" when image is not null => $"sqlbranch image build {image}",
                 _ => null,
             };

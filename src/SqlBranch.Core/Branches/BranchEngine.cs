@@ -21,14 +21,36 @@ internal sealed class BranchEngine : IAsyncDisposable
 
     private readonly IContainerRuntime _runtime;
     private readonly string _engineName;
+    private readonly string _engineImage;
+    private readonly PoolLocation _pool;
 
-    private BranchEngine(IContainerRuntime runtime, string engineName, string password, EngineEndpoint endpoint, IEngineSession session)
+    private BranchEngine(IContainerRuntime runtime, string engineName, string engineImage, PoolLocation pool, string password, EngineEndpoint endpoint, IEngineSession session)
     {
+        _engineImage = engineImage;
+        _pool = pool;
         _runtime = runtime;
         _engineName = engineName;
         Password = password;
         Endpoint = endpoint;
         Session = session;
+    }
+
+    /// <summary>The pool format read with the credentials: 1 or 2.</summary>
+    public int PoolFormat { get; private set; } = 1;
+
+    private CredentialsFile Credentials { get; set; } = null!;
+
+    internal Task RequireWritableAsync(CancellationToken cancellationToken) =>
+        PoolUpgradeGuard.RequireWritableAsync(Credentials, Session, cancellationToken);
+
+    /// <summary>
+    /// Reads the pool format again after the command's locks (design D8). During an unfinished or running upgrade it exits 3
+    /// <c>pool_upgrade_required</c>; otherwise the command goes on with the format it has now.
+    /// </summary>
+    internal async Task RecheckFormatAsync(CancellationToken cancellationToken)
+    {
+        Credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, _engineImage, _pool, Session, cancellationToken).ConfigureAwait(false);
+        PoolFormat = Credentials.Format;
     }
 
     public IContainerRuntime Runtime => _runtime;
@@ -53,14 +75,15 @@ internal sealed class BranchEngine : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(pool);
         var engine = ImageCatalog.RequireRunningEngine(pool);
-        var password = await EngineCredentials.ReadAsync(runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         redactor.Register(password);
 
         var endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort));
         var session = await connector.ConnectAsync(endpoint, password, cancellationToken).ConfigureAwait(false);
-        return new BranchEngine(runtime, engineName, password, endpoint, session);
+        return new BranchEngine(runtime, engineName, engine.Image, pool.Location, password, endpoint, session) { PoolFormat = credentials.Format, Credentials = credentials };
     }
 
     public ValueTask DisposeAsync() => Session.DisposeAsync();
@@ -131,8 +154,15 @@ internal sealed class BranchEngine : IAsyncDisposable
     /// <summary>Writes <c>branch.json</c>.</summary>
     public async Task WriteRecordAsync(string name, BranchRecord record, CancellationToken cancellationToken)
     {
+        await ShellAsync(RecordWriteScript(name, record), "writing branch.json", cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The script that writes <c>branch.json</c> to <c>branch.json.new</c> and renames it over the record (design D11).</summary>
+    public static string RecordWriteScript(string name, BranchRecord record)
+    {
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(record.ToJson()));
-        await ShellAsync($"printf %s {Quoting.Shell(encoded)} | base64 -d > {Quoting.Shell(BranchPaths.Json(name))}", "writing branch.json", cancellationToken).ConfigureAwait(false);
+        var temporary = Quoting.Shell(BranchPaths.Json(name) + ".new");
+        return $"printf %s {Quoting.Shell(encoded)} | base64 -d > {temporary} && sync {temporary} && mv -f {temporary} {Quoting.Shell(BranchPaths.Json(name))}";
     }
 
     /// <summary>The engine has a database of this name.</summary>

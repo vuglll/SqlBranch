@@ -103,7 +103,7 @@ internal static class BranchCommands
         // The rules come first, so a bad name exits 2 even before init.
         NameRules.ValidateBranch(name);
         var context = CommandContext.RequireAsync(services, redactor, configFile, CancellationToken.None).GetAwaiter().GetResult();
-        var reset = new BranchResetter(services.Runtime, services.Connector, redactor, services.EngineName)
+        var reset = new BranchResetter(services.Runtime, services.Connector, redactor, services.EngineName, time: services.Clock)
             .ResetAsync(context.Pool, context.Settings.Port, name, CancellationToken.None, context.Settings.RequireThin).GetAwaiter().GetResult();
         return DescribeReset(reset);
     }
@@ -119,6 +119,11 @@ internal static class BranchCommands
             $"Database: {reset.Database}",
             "The connection string is unchanged.",
         };
+        if (reset.ImageVersion is not null)
+        {
+            text.Insert(1, $"Image version: {reset.ImageVersion}");
+        }
+
         if (reset.Mode == CloneMode.Copy)
         {
             text.Insert(2, "The branch's files are full copies of the image's files.");
@@ -130,6 +135,7 @@ internal static class BranchCommands
             {
                 ["name"] = reset.Name,
                 ["image"] = reset.Image,
+                ["imageVersion"] = reset.ImageVersion,
                 ["cloneMode"] = mode,
                 ["server"] = reset.Server,
                 ["database"] = reset.Database,
@@ -293,7 +299,7 @@ internal static class BranchCommands
             var rows = listing.Branches.Select(b => new[]
             {
                 b.Name,
-                b.Image is null ? "-" : b.ImageRemoved ? $"{b.Image} (removed)" : b.Image,
+                b.Image is null ? "-" : b.ImageRemoved ? $"{b.ImageVersion ?? b.Image} (removed)" : b.ImageVersion ?? b.Image,
                 b.CloneMode,
                 b.CreatedAt is { } at ? at.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture) : "-",
                 b.State,
@@ -316,6 +322,7 @@ internal static class BranchCommands
             {
                 ["name"] = b.Name,
                 ["image"] = b.Image,
+                ["imageVersion"] = b.ImageVersion,
                 ["imageRemoved"] = b.ImageRemoved,
                 ["cloneMode"] = b.CloneMode,
                 ["createdAt"] = b.CreatedAt?.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
@@ -342,6 +349,11 @@ internal static class BranchCommands
             $"User: {created.User}",
             $"Run 'sqlbranch branch conn {created.Name}' for the connection string.",
         };
+        if (created.ImageVersion is not null)
+        {
+            text.Insert(1, $"Image version: {created.ImageVersion}");
+        }
+
         if (created.Mode == CloneMode.Copy)
         {
             text.Insert(2, "The branch's files are full copies of the image's files.");
@@ -356,6 +368,7 @@ internal static class BranchCommands
                 ["expiresAt"] = created.ExpiresAt?.UtcDateTime,
                 ["labels"] = System.Text.Json.JsonSerializer.SerializeToNode(created.Labels),
                 ["image"] = created.Image,
+                ["imageVersion"] = created.ImageVersion,
                 ["cloneMode"] = mode,
                 ["server"] = created.Server,
                 ["database"] = created.Database,

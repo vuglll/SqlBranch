@@ -76,6 +76,36 @@ public sealed class BacpacBuildTests
         }
     }
 
+    [Fact]
+    public async Task An_unfinished_pool_upgrade_refuses_the_build_before_any_scratch_or_ownership_write()
+    {
+        using var tree = new TempTree();
+        var file = tree.File("shop.bacpac", "text");
+        var world = new CliWorld();
+        world.WithEngine();
+        Format2Pool.Apply(world, UpgradeRecord.Running);
+        var engine = world.Runtime.Containers[ContainerLabels.EngineName] with { Id = "owned", Hostname = "test-host", PublishedPorts = ["127.0.0.1:14330"] };
+        world.Runtime.Containers[engine.Id!] = engine;
+        var scripts = new List<string>();
+        world.Runtime.ExecHandler = (_, args) =>
+        {
+            scripts.Add(args[2]);
+            return FakeContainerRuntime.Ok();
+        };
+        world.Connector.ScalarHandler = sql => sql.Contains("MachineName", StringComparison.Ordinal) ? "test-host" : 0;
+        var pool = PoolFinder.LocationOf(engine, world.Services().Paths);
+        var builder = new BacpacBuilder(world.Runtime, world.Connector, world.Redactor, world.SqlPackageProcess);
+
+        var error = await Assert.ThrowsAsync<SqlBranchException>(() => builder.BuildAsync(new FoundPool(pool, "plain", PoolSource.EngineLabels, engine),
+            14330, new ImageBuildRequest("shop", "", 0), file, file, world.Environment, tree.Root, CancellationToken.None));
+
+        Assert.Equal("pool_upgrade_required", error.Code.Code);
+        Assert.Contains("sqlbranch pool upgrade --yes", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(scripts, s => s.Contains("mkdir", StringComparison.Ordinal) || s.Contains("SQLBRANCH_FREE", StringComparison.Ordinal));
+        Assert.DoesNotContain(world.Connector.Statements, s => s.Contains("MachineName", StringComparison.Ordinal) || s.StartsWith("CREATE", StringComparison.Ordinal));
+        Assert.Empty(world.SqlPackageProcess.Calls);
+    }
+
     [Theory]
     [InlineData("Msg 1105, Level 17", "pool_full")]
     [InlineData("Msg 9002, Level 17", "pool_full")]
@@ -200,4 +230,37 @@ public sealed class BacpacBuildTests
     {
         public Task ConsumeAsync(BacpacImportTarget target, CancellationToken cancellationToken) => Task.FromException(error);
     }
+    [Fact]
+    public async Task A_bacpac_build_checks_an_unreadable_catalog_even_when_the_image_folder_exists()
+    {
+        using var tree = new TempTree();
+        var file = tree.File("shop.bacpac", "");
+        BacpacPackageTests.Write(file, "");
+        var world = new CliWorld();
+        world.WithEngine();
+        Format2Pool.Apply(world);
+        var engine = world.Runtime.Containers[ContainerLabels.EngineName] with { Id = "owned", Hostname = "test-host", PublishedPorts = ["127.0.0.1:14330"] };
+        world.Runtime.Containers[engine.Id!] = engine;
+        var scripts = new List<string>();
+        world.Runtime.ExecHandler = (_, args) =>
+        {
+            var script = args[2];
+            scripts.Add(script);
+            return FakeContainerRuntime.Ok(script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal)
+                ? "SQLBRANCH_CATALOGFILE=" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{not json"))
+                : script.Contains("echo exists", StringComparison.Ordinal) ? "exists" : "");
+        };
+        world.Connector.ScalarHandler = sql => sql.Contains("MachineName", StringComparison.Ordinal) ? "test-host" : 0;
+        var pool = PoolFinder.LocationOf(engine, world.Services().Paths);
+        var builder = new BacpacBuilder(world.Runtime, world.Connector, world.Redactor, world.SqlPackageProcess);
+        var error = await Assert.ThrowsAsync<SqlBranchException>(() => builder.BuildAsync(new FoundPool(pool, "plain", PoolSource.EngineLabels, engine),
+            14330, new ImageBuildRequest("shop", "", 0), file, file, world.Environment, tree.Root, CancellationToken.None, new BacpacBuildProgress()));
+        Assert.Equal(ErrorCodes.OperationFailed, error.Code);
+        Assert.Contains("sqlbranch image rm shop", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(scripts, s => s.Contains("mkdir", StringComparison.Ordinal) || s.Contains("rm ", StringComparison.Ordinal));
+        Assert.DoesNotContain(world.Connector.Statements, s => s.StartsWith("CREATE", StringComparison.Ordinal));
+        Assert.Empty(world.Runtime.Copies);
+        Assert.Empty(world.SqlPackageProcess.Calls);
+    }
+
 }

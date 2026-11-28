@@ -18,6 +18,9 @@ namespace SqlBranch.Core.Branches;
 /// <param name="OwnBytes">The space the branch's own data uses beyond blocks shared with other files, or null when it could not be read.</param>
 public sealed record BranchEntry(string Name, string? Image, bool ImageRemoved, string CloneMode, DateTimeOffset? CreatedAt, string State, long? OwnBytes)
 {
+    /// <summary>The base version ID on a format-2 pool; null on format 1, for an unknown base, a base removed before the upgrade and a legacy record.</summary>
+    public string? ImageVersion { get; init; }
+
     public bool Ephemeral { get; init; }
     public DateTimeOffset? ExpiresAt { get; init; }
     public bool Expired { get; init; }
@@ -52,9 +55,11 @@ public sealed class BranchLister
 {
     private const string ImageTag = "SQLBRANCH_IMG";
     private const string BranchTag = "SQLBRANCH_BR";
+    private const string CatalogTag = "SQLBRANCH_CAT";
 
     /// <summary>
-    /// Prints one <c>SQLBRANCH_IMG|name</c> line for each image that has a manifest and one
+    /// Prints one <c>SQLBRANCH_IMG|name</c> line for each image that has a manifest, one <c>SQLBRANCH_CAT|name|catalog.json as base64</c> line
+    /// for each image that has a catalog (format 2), and one
     /// <c>SQLBRANCH_BR|name|branch.json as base64|own bytes</c> line for each branch folder with a <c>branch.json</c>.
     /// The own size is a number, or <c>-</c> when it could not be read. The folder names reach the script only as the
     /// loop variable of a glob under <c>/pool</c>, never as text of the script.
@@ -66,7 +71,8 @@ public sealed class BranchLister
         "/^ *[0-9]+: / { l = $0; gsub(/[.:]/, \" \", l); n = split(l, a, \" \"); if (a[n] !~ /shared/) own += a[6] * bs } " +
         "END { if (bs > 0) print own + 0; else print \"-\" }'; }; " +
         "own_copy() { du -sB1 \"$1\" 2>/dev/null | cut -f1; }; " +
-        "for d in /pool/images/*/; do [ -f \"${d}manifest.json\" ] && echo \"SQLBRANCH_IMG|$(basename \"$d\")\"; done; " +
+        "for d in /pool/images/*/; do n=$(basename \"$d\"); [ -f \"${d}catalog.json\" ] && echo \"SQLBRANCH_CAT|$n|$(base64 -w0 \"${d}catalog.json\")\"; " +
+        "[ -f \"${d}manifest.json\" ] && echo \"SQLBRANCH_IMG|$n\"; done; " +
         "for d in /pool/branches/*/; do [ -f \"${d}branch.json\" ] || continue; " +
         "if grep -Eq '\"cloneMode\"[[:space:]]*:[[:space:]]*\"copy\"' \"${d}branch.json\"; then own=$(own_copy \"${d}data\"); else own=$(own_thin \"${d}data\"); fi; " +
         "echo \"SQLBRANCH_BR|$(basename \"$d\")|$(base64 -w0 \"${d}branch.json\")|${own:--}\"; done; true";
@@ -96,9 +102,10 @@ public sealed class BranchLister
     {
         ArgumentNullException.ThrowIfNull(pool);
         var engine = ImageCatalog.RequireRunningEngine(pool);
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
@@ -123,11 +130,16 @@ public sealed class BranchLister
         }
 
         var images = new HashSet<string>(StringComparer.Ordinal);
+        var catalogs = new Dictionary<string, ImageCatalogFile?>(StringComparer.Ordinal);
         var found = new List<(string Name, string Json, long? Own)>();
         foreach (var line in result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var parts = line.Split('|', 4);
-            if (parts[0] == ImageTag && parts.Length >= 2)
+            if (parts[0] == CatalogTag && parts.Length >= 3)
+            {
+                catalogs[parts[1]] = ParseCatalog(parts[2]);
+            }
+            else if (parts[0] == ImageTag && parts.Length >= 2)
             {
                 images.Add(parts[1]);
             }
@@ -144,6 +156,7 @@ public sealed class BranchLister
         foreach (var (name, encoded, own) in found.OrderBy(f => f.Name, StringComparer.Ordinal))
         {
             var (image, mode, created, recordedState, labels, ephemeral, expiresAt) = ReadRecord(encoded);
+            var (imageVersion, baseKnown) = ReadBase(encoded);
             if (filters is not null && !filters.All(pair => labels is not null &&
                 labels.TryGetValue(pair.Key, out var value) && value == pair.Value))
             {
@@ -161,11 +174,61 @@ public sealed class BranchLister
                 warnings.Add($"The changed-data size of branch {name} could not be read.");
             }
 
-            branches.Add(new BranchEntry(name, image, image is not null && !images.Contains(image), mode, created, state, own)
-            { Ephemeral = ephemeral, ExpiresAt = expiresAt, Expired = ephemeral && expiresAt < now, Labels = labels ?? [] });
+            var removed = image is not null && !images.Contains(image);
+            if (credentials.Format >= 2 && image is not null && baseKnown is not null)
+            {
+                // The base version decides on format 2 (design D5): the name's catalog must still list it, also after the name was used again.
+                removed = baseKnown == true
+                    ? imageVersion is null || !(catalogs.GetValueOrDefault(image)?.Versions.Any(v => v.Id == imageVersion) ?? false)
+                    : !ImageExists(image, images, catalogs);
+            }
+            else if (credentials.Format >= 2 && image is not null)
+            {
+                removed = !ImageExists(image, images, catalogs);
+            }
+
+            branches.Add(new BranchEntry(name, image, removed, mode, created, state, own)
+            { ImageVersion = credentials.Format >= 2 ? imageVersion : null, Ephemeral = ephemeral, ExpiresAt = expiresAt, Expired = ephemeral && expiresAt < now, Labels = labels ?? [] });
         }
 
         return new BranchListing(branches, warnings);
+    }
+
+    /// <summary>A name exists on format 2 when its catalog has a current version, or it has a manifest and no catalog (design D3).</summary>
+    private static bool ImageExists(string image, HashSet<string> images, Dictionary<string, ImageCatalogFile?> catalogs) =>
+        catalogs.TryGetValue(image, out var catalog) ? catalog is { Current: not null } : images.Contains(image);
+
+    private static ImageCatalogFile? ParseCatalog(string encoded)
+    {
+        try
+        {
+            return ImageCatalogFile.TryParse(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded)));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The recorded base: the version ID and whether the base is known; <c>baseKnown</c> is null when the record has no base fields.</summary>
+    internal static (string? ImageVersion, bool? BaseKnown) ReadBase(string encoded)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(Convert.FromBase64String(encoded));
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("baseKnown", out var known) ||
+                known.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return (null, null);
+            }
+
+            return (root.TryGetProperty("imageVersion", out var version) && version.ValueKind == JsonValueKind.String ? version.GetString() : null, known.GetBoolean());
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException)
+        {
+            return (null, null);
+        }
     }
 
     private static string StateOf(string name, string? recordedState, Dictionary<string, (string State, List<string> Files)> databases)

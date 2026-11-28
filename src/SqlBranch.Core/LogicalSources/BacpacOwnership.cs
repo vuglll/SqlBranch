@@ -170,7 +170,7 @@ internal sealed class BacpacOwnership(IContainerRuntime runtime, ContainerInfo e
         await WriteRecordAsync(op, noCancel).ConfigureAwait(false);
     }
 
-    public async Task<bool> PublishImageAsync(BacpacOperation op, ImageManifest manifest)
+    public async Task<bool> PublishImageAsync(BacpacOperation op, ImageManifest manifest, ImageCatalogFile? catalog = null)
     {
         var token = CancellationToken.None;
         await VerifyRecordAsync(op, token).ConfigureAwait(false);
@@ -178,7 +178,9 @@ internal sealed class BacpacOwnership(IContainerRuntime runtime, ContainerInfo e
         var source = Quoting.Shell(op.StagedImage);
         var target = Quoting.Shell(ImagePaths.Image(manifest.Name));
         var write = ImageSealer.ManifestScript(manifest, op.StagedImage + "/manifest.json");
-        await ShellAsync($"set -eC; {Require(OwnedImage(op))}; {Require(write)}", token).ConfigureAwait(false);
+        // On a format-2 pool the catalog goes into the staged folder with the manifest, so the one rename publishes both.
+        var catalogWrite = catalog is null ? string.Empty : $"; {Require(ImageVersions.CatalogScript(op.StagedImage, catalog))}";
+        await ShellAsync($"set -eC; {Require(OwnedImage(op))}; {Require(write)}{catalogWrite}", token).ConfigureAwait(false);
         await ShellAsync($"set -e; {Require(OwnedImage(op))}; mkdir -p {root}; {Require(CanonicalDirectory(root))}; " +
             $"[ \"$(stat -c %d {source})\" = \"$(stat -c %d {root})\" ]; " +
             $"{Require(OwnedImage(op))}; mv -nT -- {source} {target}; {Require(Missing(source))}",
@@ -207,7 +209,7 @@ internal sealed class BacpacOwnership(IContainerRuntime runtime, ContainerInfo e
         var names = new[] { op.Data, op.Log, op.RebuiltLog }.Select(path => Path.GetFileName(path)!).ToArray();
         var files = names.Select(name => "./" + name).ToArray();
         var checks = files.Select(file => AnyOf(Missing(Quoting.Shell(file)), RegularFile(file)));
-        var imageEntries = OnlyEntries(".", "data", "manifest.json");
+        var imageEntries = OnlyEntries(".", "data", "manifest.json", ImageCatalogFile.FileName, ImageCatalogFile.TemporaryName);
         var dataEntries = OnlyEntries(".", names);
         var dataPath = Quoting.Shell(op.StagedImage + "/data");
         var verifyData = $"[ \"$(pwd -P)\" = {dataPath} ] && {dataEntries} && {string.Join(" && ", checks)}";
@@ -217,7 +219,7 @@ internal sealed class BacpacOwnership(IContainerRuntime runtime, ContainerInfo e
             $"{Require(imageEntries)}; {Require(AnyOf(Missing(manifest), RegularFile(manifest)))}; " +
             $"if {Present(data)}; then {Require($"[ -d {data} ] && [ ! -L {data} ]")}; " +
             $"(cd -P -- {data}; {Require(verifyData)}; rm -f -- {string.Join(' ', files.Select(Quoting.Shell))}); rmdir -- {data}; fi; " +
-            $"rm -f -- {manifest}); {Require(OwnedImage(op))}; rmdir -- {image}";
+            $"rm -f -- {manifest} ./{ImageCatalogFile.FileName} ./{ImageCatalogFile.TemporaryName}); {Require(OwnedImage(op))}; rmdir -- {image}";
     }
 
     public async Task RemoveOriginalLogAsync(BacpacOperation op, CancellationToken token)

@@ -15,6 +15,9 @@ public static class ImagePaths
 
     public static string Data(string name) => $"{Image(name)}/data";
 
+    /// <summary>The data folder of the version whose files are in <paramref name="directory"/> of the image folder (<c>.</c> or <c>versions/&lt;id&gt;</c>).</summary>
+    public static string Data(string name, string directory) => directory == "." ? Data(name) : $"{Image(name)}/{directory}/data";
+
     public static string Manifest(string name) => $"{Image(name)}/manifest.json";
 
     public static string Build(string id) => $"{BuildRoot}/{id}";

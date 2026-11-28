@@ -2,16 +2,25 @@
 
 ## Why
 
-A team needs a fresh masked image each morning while developers finish work on yesterday's branches. F4 of release 0.3 lets a scheduled build publish only a complete image and lets each developer choose when to discard branch edits.
+A team needs a fresh masked image each morning while developers finish work on yesterday's branches. This change implements feature F4 (`add-image-refresh`) of release 0.3 in `docs/roadmap.md`: a scheduled build publishes only a complete image, and each developer chooses when to discard branch edits.
 
-The roadmap prerequisite is met: 0.1 was archived on 2026-11-17. F4 has no prerequisite spike gate. The nightly recipe also needs archived F1 (cloud restore and masking hooks) and approved, unarchived F3 (archive export/import). Task 4.3 requires F3 (PR #18) merged into dev. Archive F3 before F4 so the two modified import requirements exist in the main images spec.
+Prerequisites, checked 2026-11-24 against `docs/roadmap.md` and `openspec/changes/archive/`:
+
+- F4's "Needs first" is now "0.1 archived; `add-pool-format-upgrade` archived". 0.1 was archived 2026-11-17. **`add-pool-format-upgrade` is not archived yet**: it was split out of this change on 2026-11-24 and is proposed alongside it. This change must not be applied before it is archived. It supplies pool format 2, `pool upgrade --yes`, the per-name image catalog, version IDs, the branch base field, the `publishWait` setting and the error codes `catalog_busy` and `pool_upgrade_required`. Two deltas here modify requirements that change adds (see Impact). F4 has no spike gate of its own beyond task group 1. F4a and F4 ship together in release 0.3 (maintainer decision 1, 2026-11-24); one 0.3 `CHANGELOG.md` entry covers both.
+- The nightly recipe also uses F1 (cloud restore and masking hooks) and F3 (archive export and import). F1 and F3 were archived on 2026-11-19 and F2 (BACPAC source) on 2026-11-20, so the import requirements this change modifies are in the main `images` spec.
+- BACPAC replacement stays out. Its draft, `add-bacpac-replacement` in `docs/feature-drafts.md`, needs "F2 archived and F4 version publication available"; it can start after this change is archived.
 
 ## What Changes
 
-- Add `--replace` to backup and scripts builds for repeatable nightly builds. Keep sealed versions and switch the current name once, after all build steps succeed.
-- Add `image list --versions`, per-version sizes and branch counts and `image prune --keep <n>`. Keep the newest n per image plus every referenced base without a cap. In copy mode, each retained version consumes a full set of files.
-- Plain CLI and fixture resets restore the branch’s own version. Only `branch reset <name> --latest` moves it to the current version. Branches continue serving their own data until reset. List shows which are behind.
-- Document cron, launchd, Task Scheduler and CI examples, cloud restore with masking, F3 export and the developer import/reset handoff. Add `image import --replace` to publish a verified archive over an occupied name while preserving pinned versions.
+Every new option and command here works only on a pool that uses format 2. On a format-1 pool they exit 3 with `pool_upgrade_required` (owned by `add-pool-format-upgrade`) and name `sqlbranch pool upgrade --yes`. Nothing here upgrades a pool.
+
+- Add `--replace` to backup and scripts builds and to `image import`. Keep sealed versions and switch the current version once, after every build step succeeds. Before publishing, wait up to `publishWait` for running creates and resets of the name, then give up with `catalog_busy`. Creates and resets that start while a publication waits are not blocked: they use the version current when they start. A create or reset that meets the brief exclusive catalog hold of a publication, removal or prune retries for up to 30 seconds without queueing, then exits `catalog_busy`. The loser of two overlapping replacements exits `image_exists`; a replacement meeting a running prune of the name waits up to `publishWait`, and one meeting a running removal exits `catalog_busy`.
+- Add `image list --versions` with per-version sizes and branch counts, and `image prune --keep <n>`, which keeps the newest n versions per image plus every version a branch uses, with no cap. Branches with an unknown base reference no version, so nothing extra is kept for them; their fix is `branch reset <name> --latest` or remove and create. Prune skips, and reports, versions being exported, names being built and names with a running create or reset, and never deletes branch files or workspaces. In copy mode each retained version is a full set of files.
+- `image rm` on a format-2 pool removes every version, names branches that lose their reset base, waits up to `publishWait` for running creates and resets (`catalog_busy`), exits `catalog_busy` at once when a replacement or prune of the name is running, and retries only its own leftovers.
+- `image export` on a format-2 pool reads the version current when it starts.
+- Plain CLI and fixture resets keep restoring the branch's own version. Only `branch reset <name> --latest` moves it to the current version. `branch list` shows which branches are behind (`outdated`).
+- The agent skill tells agents not to run `image prune` unless the user asks, and marks `--latest` as discarding local edits.
+- Document cron, scheduled CI, launchd and Windows Task Scheduler jobs, cloud restore with masking, export, and the developer import and reset steps.
 
 ## Capabilities
 
@@ -21,17 +30,24 @@ None.
 
 ### Modified Capabilities
 
-- `images` owns publication, retention, removal, inspection and prune input.
-- `branches` owns version references, stale markers and CLI reset selection.
-- `engine` reports abandoned version and reset work.
-- `test-fixtures` preserves the pinned base on reset.
+- `images`: publication, retention, removal across versions, version listing, prune input and output, import `--replace`, export version selection.
+- `branches`: the behind marker, reset to latest, retrying a broken branch, the 30-second retry of create and reset, and the `--latest` hint on a refused reset.
+- `engine`: the format-2 gate for refresh options, and status of interrupted version work.
+- `test-fixtures`: reset keeps the pinned base across a refresh, and the `--latest` hint.
+- `agent-skill`: a guardrail for `image prune`, and reference entries for `image prune` and `branch reset --latest`.
 
 ## Impact
 
-Core image and branch operations, CLI metadata, status inspection, on-pool metadata, JSON fields and user docs change. Existing pools need a compatible first read. The test fixture retains its reset-to-base contract. F3 archives continue to carry a single manifest and its files.
+Core image and branch operations, CLI metadata, status, on-pool metadata, JSON fields and user docs change. No new error codes: `catalog_busy` and `pool_upgrade_required` come from `add-pool-format-upgrade`. No new setting: `publishWait` comes from there too.
 
-Peak space, concurrent workload impact, crash-safe publication and real scheduler invocations are **not verified (no network in this run)**. Spikes 1.1–1.4 in tasks.md settle them. See [the dated research note](../../../docs/research/2026-11-19-image-refresh-facts.md).
+The deltas "Plain reset refuses a removed or unknown base", "Reset checks before it drops", "A broken branch can be reset again" and "Reset a branch" (`branches`), "Image names are unique" and "Remove an image" (`images`), "Reset from test code" and "Fixture reset with a removed or unknown base" (`test-fixtures`), and "Guardrails" (`agent-skill`) modify requirements that `add-pool-format-upgrade` adds or modifies, and start from its text. `openspec validate` reports that archive would refuse them until that change is archived; that is expected and is why this change depends on it.
+
+0.2.2 `image list` and `image export` on an upgraded pool see only the version the upgrade created, while it is kept: after a refresh they list or export an older version than the current one, and a 0.2.2 export can fail if `image prune` removes its version during the export (0.2.2 takes no export lock). This is a documented limitation, not blocked.
+
+F3 archives keep carrying one manifest and its files.
+
+Peak space, workload impact during refresh, how SQL Server queues application-lock requests, and crash-safe publication are **not verified yet**. Spikes 1.1-1.3 settle them as the first task group after approval (Docker is available on the maintainer's Linux machine). Real scheduler runs are spike 1.4; launchd and Task Scheduler examples may ship marked "not verified". See [the dated research note](../../../docs/research/2026-11-19-image-refresh-facts.md).
 
 ## Out of scope
 
-Built-in scheduling, automatic branch resets, arbitrary version selection, archive history, incremental builds, automatic pruning and performance guarantees. BACPAC replacement is deferred to a follow-up after F2 is archived.
+Built-in scheduling, automatic branch resets, arbitrary version selection, archive history, incremental builds, automatic pruning, BACPAC replacement (deferred to `add-bacpac-replacement`), performance guarantees, and everything `add-pool-format-upgrade` owns: pool formats, the upgrade, the catalog format, version-ID allocation, the branch base field, `publishWait` and making `init` create format-2 pools.

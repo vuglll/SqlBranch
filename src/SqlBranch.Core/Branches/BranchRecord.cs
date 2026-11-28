@@ -16,6 +16,8 @@ namespace SqlBranch.Core.Branches;
 /// <param name="ExplicitCopy">True when the branch was created with <c>--copy</c>; absent (false) otherwise and in older records. Only such a branch is exempt from <c>requireThin</c> at reset.</param>
 /// <param name="Ephemeral">Whether this branch is short-lived.</param>
 /// <param name="ExpiresAt">When a short-lived branch becomes eligible for pruning.</param>
+/// <param name="ImageVersion">The version ID the branch was cloned from (design D5); null with <paramref name="BaseKnown"/> true means the image was already removed when the pool was upgraded.</param>
+/// <param name="BaseKnown">True when the base is recorded, false for an unknown base; null (field absent) for a record no format-2 command has written.</param>
 public sealed record BranchRecord(
     string Image,
     string CloneMode,
@@ -24,7 +26,9 @@ public sealed record BranchRecord(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? State = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool ExplicitCopy = false,
     bool Ephemeral = false,
-    DateTimeOffset? ExpiresAt = null)
+    DateTimeOffset? ExpiresAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ImageVersion = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? BaseKnown = null)
 {
     /// <summary>The value of <see cref="State"/> that marks a branch whose reset failed after the drop.</summary>
     public const string BrokenState = "broken";
@@ -35,7 +39,17 @@ public sealed record BranchRecord(
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
 
-    public string ToJson() => JsonSerializer.Serialize(this, Options);
+    public string ToJson()
+    {
+        // A known base with no version ("removed before the upgrade") needs an explicit null, which the ignore condition would drop.
+        var node = JsonSerializer.SerializeToNode(this, Options)!.AsObject();
+        if (BaseKnown is not null && ImageVersion is null)
+        {
+            node["imageVersion"] = null;
+        }
+
+        return node.ToJsonString(Options);
+    }
 
     public static BranchRecord FromJson(string json) =>
         JsonSerializer.Deserialize<BranchRecord>(json, Options)

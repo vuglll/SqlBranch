@@ -154,6 +154,7 @@ engine's `sa` password, which `sqlbranch` stores in the pool's credentials file.
 | `image` | The image the files were cloned from. `image list` and `image rm` count branches by it |
 | `cloneMode` | `thin` or `copy`; a later reset recreates the branch the same way |
 | `explicitCopy` | `true` only when the branch was created with `--copy`; left out otherwise (and in records written before the field existed). Only such a branch is exempt from `requireThin` at reset |
+| `imageVersion`, `baseKnown` | Format-2 pools only (see "The branch base on a format-2 pool"). Absent in records written on a format-1 pool; `imageVersion` is null with `baseKnown` true for a base removed before the upgrade |
 | `createdAt` | When the branch was created, UTC |
 | `labels` | Key/value pairs set at creation, or an empty object |
 | `ephemeral` | True for a short-lived branch. Defaults to false for older records |
@@ -289,6 +290,25 @@ exits 1, keeps the branch's record, and `branch list` shows the branch as
 image. The same retry repairs a branch that a killed reset left without a
 database. A branch whose image was removed with `image rm --force` cannot be
 repaired by a reset; remove it and create a new one from another image.
+
+## The branch base on a format-2 pool
+
+On a format-2 pool `branch create` records the ID of the image's current version in `branch.json` (`imageVersion`, with
+`baseKnown` true), and a successful reset records the version it attached. `branch.json` is written to `branch.json.new` and
+renamed. `branch list` shows the recorded ID as `imageVersion`; `imageRemoved` is true when the name's catalog no longer lists
+it, also after the name was built again. Format 1 records and shows no version (null).
+
+| Recorded base | `imageVersion` | `imageRemoved` | Reset |
+|---|---|---|---|
+| a version ID | the ID | true when the catalog does not list it | restores that version |
+| none, image removed before the upgrade | null | true | refused |
+| unknown | null | false while the name exists | refused |
+| no base fields (written before the upgrade) | null | by name, as in 0.2.2 | restores the current version and records it |
+
+A reset restores the recorded base, so a branch keeps the data it was made from even when the name now holds a newer
+version. For a removed or unknown base `branch reset` exits 1 with `image_not_found` before it closes any connection, leaves
+the branch as it was, and tells you to remove it with `sqlbranch branch rm <name>` and create a new one with
+`sqlbranch branch create`. A broken branch that is retried gets the same checks.
 
 ## branch rm
 

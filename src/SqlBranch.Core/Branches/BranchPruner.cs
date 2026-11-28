@@ -1,5 +1,6 @@
 using SqlBranch.Core.Containers;
 using SqlBranch.Core.Engine;
+using SqlBranch.Core.Output;
 using SqlBranch.Core.Secrets;
 
 namespace SqlBranch.Core.Branches;
@@ -15,6 +16,10 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
     public async Task<PruneResult> PruneAsync(FoundPool pool, int fallbackPort, CancellationToken cancellationToken,
         string? owner = null)
     {
+        await using (var guard = await BranchEngine.OpenAsync(runtime, connector, redactor, engineName, pool, fallbackPort, cancellationToken).ConfigureAwait(false))
+        {
+            await guard.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
+        }
         var time = clock ?? TimeProvider.System;
         var lister = new BranchLister(runtime, connector, redactor, engineName, time);
         KeyValuePair<string, string>[] filters = owner is null ? [] : [new("sqlbranch.owner", owner)];
@@ -36,6 +41,8 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
                     continue;
                 }
 
+                await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
+
                 // The original branch could have been removed and the name reused since listing.
                 var (_, record) = await engine.ReadRecordAsync(name, cancellationToken).ConfigureAwait(false);
                 if (record is not { Ephemeral: true, ExpiresAt: { } expiry } || expiry >= time.GetUtcNow() ||
@@ -47,6 +54,16 @@ public sealed class BranchPruner(IContainerRuntime runtime, IEngineConnector con
                 var removal = await BranchRemover.RemoveLockedAsync(engine, name, cancellationToken).ConfigureAwait(false);
                 removed.Add(name);
                 warnings.AddRange(removal.Warnings);
+            }
+            catch (SqlBranchException ex) when (ex.Code == ErrorCodes.PoolUpgradeRequired)
+            {
+                // The refusal ends the prune; say what it had already removed, which the error would otherwise hide.
+                if (removed.Count == 0)
+                {
+                    throw;
+                }
+
+                throw new SqlBranchException(ex.Code, $"{ex.Message} Branches removed before the refusal: {string.Join(", ", removed)}.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

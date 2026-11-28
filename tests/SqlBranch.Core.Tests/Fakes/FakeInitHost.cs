@@ -30,6 +30,9 @@ internal sealed class FakeInitHost
 
     public List<string> RemovingFolders { get; } = [];
 
+    /// <summary>The temporary files of a pool upgrade that the status listing finds, such as <c>credentials.json.new</c>.</summary>
+    public List<string> UpgradeTemporaryFiles { get; } = [];
+
     public List<string> BuildFolders { get; } = [];
 
     /// <summary>The <c>credential.json</c> of build folders, by build id.</summary>
@@ -53,14 +56,25 @@ internal sealed class FakeInitHost
             lines.AddRange(BranchFolders.Select(b => $"SQLBRANCH_BRANCH|{b.Name}|{(b.BranchJson ? 1 : 0)}|{(b.Next ? 1 : 0)}|{BranchRecords.GetValueOrDefault(b.Name)}"));
             lines.AddRange(ImageFolders.Select(i => $"SQLBRANCH_IMAGE|{i}"));
             lines.AddRange(RemovingFolders.Select(r => $"SQLBRANCH_REMOVING|{r}"));
+            lines.AddRange(UpgradeTemporaryFiles.Select(f => $"SQLBRANCH_UPGRADETEMP|{f}"));
             lines.AddRange(BuildFolders.Select(b => $"SQLBRANCH_BUILD|{b}"));
             lines.AddRange(CredentialMarkers.Select(m => $"SQLBRANCH_CRED|{m.Key}|{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(m.Value))}"));
             lines.Add(SpaceLine());
             return FakeContainerRuntime.Ok(string.Join('\n', lines));
         }
 
+        if (script.Contains("SQLBRANCH_POOLFORMAT=", StringComparison.Ordinal))
+        {
+            RereadCount++;
+            return FakeContainerRuntime.Ok("SQLBRANCH_POOLFORMAT=" +
+                (CredentialsJson is null ? "none" : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(CredentialsJson))));
+        }
+
         return FakeContainerRuntime.Ok("SQLBRANCH_PROBE=" + EngineProbe);
     }
+
+    /// <summary>How many times the exec re-read of the credentials ran (design D8).</summary>
+    public int RereadCount { get; private set; }
 
     private string SpaceLine() =>
         string.Create(CultureInfo.InvariantCulture, $"SQLBRANCH_SPACE|{Space.Total} {Space.Used} {Space.Free}");
@@ -80,6 +94,12 @@ internal sealed class FakeInitHost
     public bool MarkerExists { get; set; }
 
     public bool EngineDirExists { get; set; }
+
+    /// <summary>Every JSON a format-2 credentials write was given, in order, whether or not it succeeded.</summary>
+    public List<string> CredentialsRewrites { get; } = [];
+
+    /// <summary>The error text the format-2 credentials write fails with (for example "No space left on device"); null lets it succeed.</summary>
+    public string? CredentialsRewriteFailure { get; set; }
 
     /// <summary>The JSON of the credentials file, or null.</summary>
     public string? CredentialsJson { get; set; }
@@ -179,6 +199,19 @@ internal sealed class FakeInitHost
         if (script.Contains("SQLBRANCH_CREDENTIALS=", StringComparison.Ordinal))
         {
             return CredentialsReply();
+        }
+
+        if (spec.Stdin is { } rewritten && script.Contains("credentials.json.new", StringComparison.Ordinal) && script.Contains("mv -f", StringComparison.Ordinal))
+        {
+            // The format-2 write (design D2): the old file stays when a step before the rename fails.
+            CredentialsRewrites.Add(rewritten);
+            if (CredentialsRewriteFailure is { } failure)
+            {
+                return FakeContainerRuntime.Fail(1, failure);
+            }
+
+            CredentialsJson = rewritten;
+            return FakeContainerRuntime.Ok();
         }
 
         if (spec.Stdin is { } json && script.Contains("cat > /pool/engine/credentials.json", StringComparison.Ordinal))

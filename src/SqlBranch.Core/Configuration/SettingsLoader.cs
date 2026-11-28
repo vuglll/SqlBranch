@@ -286,6 +286,15 @@ public static class SettingsLoader
             settings = settings with { DefaultImage = NonEmpty(defaultImage, SettingKeys.DefaultImage) };
         }
 
+        if (Raw(SettingKeys.PublishWait) is { } publishWait)
+        {
+            // CheckValue already refused a bad value in every layer.
+            if (PublishWaitValue.TryParse(publishWait, out var parsed))
+            {
+                settings = settings with { PublishWait = parsed };
+            }
+        }
+
         EditionRules.Check(settings.EngineEdition, settings.EngineImage, origins.GetValueOrDefault(SettingKeys.EngineEdition));
 
         return settings with { Origins = origins };
@@ -318,6 +327,8 @@ public static class SettingsLoader
                 throw Bad("expected a port number from 1 to 65535.");
             case SettingKeys.RequireThin when !bool.TryParse(value.Trim(), out _):
                 throw Bad("expected true or false.");
+            case SettingKeys.PublishWait when !PublishWaitValue.TryParse(value, out _):
+                throw Bad("expected a whole number of minutes (1m to 1440m) or hours (1h to 24h), such as 10m or 2h.");
         }
     }
 

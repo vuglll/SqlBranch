@@ -26,7 +26,9 @@ public sealed class BranchRemover(IContainerRuntime runtime, IEngineConnector co
         NameRules.ValidateBranch(name);
 
         await using var engine = await BranchEngine.OpenAsync(runtime, connector, redactor, engineName, pool, fallbackPort, cancellationToken).ConfigureAwait(false);
+        await engine.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
         await engine.TakeBranchLockAsync(name, cancellationToken).ConfigureAwait(false);
+        await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
 
         var (exists, _) = await engine.ReadRecordAsync(name, cancellationToken).ConfigureAwait(false);
         if (!exists)

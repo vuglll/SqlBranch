@@ -22,6 +22,10 @@ internal sealed partial class BranchWorld
         {
             var script = command.Count >= 3 ? command[2] : string.Empty;
             Timeline.Add("sh: " + script);
+            if (script.Contains("SQLBRANCH_POOLFORMAT=", StringComparison.Ordinal))
+            {
+                return inner(container, command);
+            }
             if (script.Contains("SQLBRANCH_PROBE", StringComparison.Ordinal) || script.Contains("SQLBRANCH_BRANCH|", StringComparison.Ordinal))
             {
                 // The probe, and the listing script of status, which reads the host's branch folders.
@@ -42,9 +46,15 @@ internal sealed partial class BranchWorld
             if (script.Contains("SQLBRANCH_BR|", StringComparison.Ordinal))
             {
                 // The listing script of 'branch list'.
-                var lines = (ImageExists ? ["SQLBRANCH_IMG|shop"] : Array.Empty<string>())
+                var lines = (Catalog is null ? Array.Empty<string>() : [$"SQLBRANCH_CAT|{ImageName}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(Catalog))}"])
+                    .Concat(ImageExists ? [$"SQLBRANCH_IMG|{ImageName}"] : Array.Empty<string>())
                     .Concat(Records.Select(r => $"SQLBRANCH_BR|{r.Key}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(r.Value))}|1048576"));
                 return FakeContainerRuntime.Ok(string.Join('\n', lines) + "\n");
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + (Catalog is null ? "none" : Convert.ToBase64String(Encoding.UTF8.GetBytes(Catalog))));
             }
 
             if (script.Contains("SQLBRANCH_MANIFEST=", StringComparison.Ordinal))
@@ -138,6 +148,19 @@ internal sealed partial class BranchWorld
 
     public bool ImageExists { get; set; } = true;
 
+    /// <summary>The name of the one image the fake lists.</summary>
+    public string ImageName { get; set; } = "shop";
+
+    /// <summary>The <c>catalog.json</c> of the image <c>shop</c> on a format-2 pool; null means it has none.</summary>
+    public string? Catalog { get; set; }
+
+    /// <summary>Makes the pool format 2 with <c>shop</c> at <paramref name="version"/> (null: the name has no current version).</summary>
+    public void UseFormat2(string? version)
+    {
+        Format2Pool.Apply(World);
+        Catalog = Format2Pool.Catalog("shop", version);
+    }
+
     public long FreeBytes { get; set; } = 1L << 40;
 
     /// <summary>Fails the engine script it returns true for, with exit code 1.</summary>
@@ -157,9 +180,15 @@ internal sealed partial class BranchWorld
         Manifest = Manifest with { Files = [new ImageFile("Shop", "Shop.mdf", "data", bytes - 524_288), new ImageFile("Shop_log", "Shop_log.ldf", "log", 524_288)] };
 
     /// <summary>An online branch: its folder with a record, and its database attached from the folder.</summary>
-    public void AddBranch(string name, string image = "shop", string mode = "thin", string? state = null, bool explicitCopy = false)
+    public void AddBranch(string name, string image = "shop", string mode = "thin", string? state = null, bool explicitCopy = false,
+        string? imageVersion = null, bool? baseKnown = null)
     {
         AddBranchWithoutDatabase(name, image, mode, state, explicitCopy);
+        if (baseKnown is not null)
+        {
+            Records[name] = (RecordOf(name) with { ImageVersion = imageVersion, BaseKnown = baseKnown }).ToJson();
+        }
+
         World.Connector.Databases[name] = [$"/pool/branches/{name}/data/Shop.mdf", $"/pool/branches/{name}/data/Shop_log.ldf"];
     }
 

@@ -58,7 +58,7 @@ public sealed class SkillTests
             Assert.Contains("## " + heading + "\n", guide, StringComparison.Ordinal);
         }
         foreach (var rule in new[] { "only in branches you created", "Never run destructive SQL against a server other than the SqlBranch engine",
-            "Reset or remove your branches", "Never weaken a test" })
+            "Reset or remove your branches", "Never weaken a test", "Never run `sqlbranch pool upgrade` unless the user asked for it" })
         {
             Assert.Contains(rule, guide, StringComparison.Ordinal);
         }
@@ -70,6 +70,36 @@ public sealed class SkillTests
         }
         Assert.Equal("nothing", commands.Single(c => c.Path.SequenceEqual(["branch", "list"])).Metadata.Destroys);
         Assert.Contains("Expired short-lived branches and their data", files["reference/branch.md"], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_guardrail_text_has_five_rules_and_the_fifth_names_pool_upgrade_and_says_it_cannot_be_undone()
+    {
+        var guide = SkillGenerator.Generate(App.Registered)["SKILL.md"];
+        var guardrails = guide[guide.IndexOf("## Guardrails\n", StringComparison.Ordinal)..];
+        guardrails = guardrails[..guardrails.IndexOf("**Command reference**", StringComparison.Ordinal)];
+
+        var rules = guardrails.Split('\n').Where(l => l.StartsWith("- ", StringComparison.Ordinal)).ToArray();
+
+        Assert.Equal(5, rules.Length);
+        Assert.Contains("`sqlbranch pool upgrade`", rules[4], StringComparison.Ordinal);
+        Assert.Contains("cannot be undone", rules[4], StringComparison.Ordinal);
+        Assert.Contains("0.2.x", rules[4], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_pool_upgrade_reference_entry_shows_the_command_and_says_it_destroys_compatibility_and_cannot_be_undone()
+    {
+        var files = SkillGenerator.Generate(App.Registered);
+
+        var entry = files["reference/pool.md"];
+
+        Assert.Contains("## sqlbranch pool upgrade\n", entry, StringComparison.Ordinal);
+        Assert.Contains("sqlbranch pool upgrade --yes", entry, StringComparison.Ordinal);
+        var destroys = entry[entry.IndexOf("**Destroys**", StringComparison.Ordinal)..];
+        Assert.Contains("compatibility with SqlBranch 0.2.x tools", destroys, StringComparison.Ordinal);
+        Assert.Contains("cannot be undone", destroys, StringComparison.Ordinal);
+        Assert.Contains("(reference/pool.md)", files["SKILL.md"], StringComparison.Ordinal);
     }
 
     [Fact]

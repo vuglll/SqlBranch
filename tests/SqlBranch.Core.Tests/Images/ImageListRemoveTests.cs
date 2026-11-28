@@ -25,6 +25,12 @@ public sealed class ImageListRemoveTests
 
     private readonly HashSet<string> _removing = [];
 
+    /// <summary>The <c>catalog.json</c> text of image folders on a format-2 pool, by name.</summary>
+    private readonly Dictionary<string, string> _catalogs = [];
+
+    private string? _credentialsLine;
+    private bool _hasIds;
+
     /// <summary>Every script run in the engine, in order, apart from the clone probe and the status listing.</summary>
     private readonly List<string> _scripts = [];
 
@@ -73,6 +79,7 @@ public sealed class ImageListRemoveTests
                 }
 
                 _images.Remove(name);
+                _catalogs.Remove(name);
                 _removing.Add(".removing-" + name);
                 return FakeContainerRuntime.Ok("SQLBRANCH_RENAMED=yes");
             }
@@ -105,9 +112,37 @@ public sealed class ImageListRemoveTests
         return script[from..script.IndexOf('\'', from)];
     }
 
+    /// <summary>What the listing script prints for a credentials file: only the format number, 1 when there is none.</summary>
+    private static string FormatNumber(string credentialsJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(credentialsJson);
+            return document.RootElement.TryGetProperty("format", out var f) ? f.GetInt32().ToString(System.Globalization.CultureInfo.InvariantCulture) : "1";
+        }
+        catch (JsonException)
+        {
+            return "unreadable";
+        }
+    }
+
     private string Listing()
     {
         var lines = new List<string>();
+        if (_hasIds)
+        {
+            lines.Add("SQLBRANCH_FORMAT2CONTENT");
+        }
+        if (_credentialsLine is not null)
+        {
+            lines.Add($"SQLBRANCH_POOLCRED|{FormatNumber(_credentialsLine)}");
+        }
+
+        foreach (var (name, json) in _catalogs)
+        {
+            lines.Add($"SQLBRANCH_CATALOG|{name}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(json))}");
+        }
+
         foreach (var (name, manifest) in _images.OrderBy(i => i.Key, StringComparer.Ordinal))
         {
             var json = _rawManifests.GetValueOrDefault(name) ?? manifest.ToJson();
@@ -130,6 +165,19 @@ public sealed class ImageListRemoveTests
             "FULL", "SIMPLE", 268_435_456, LogRebuilt: true,
             built ?? new DateTimeOffset(2026, 11, 16, 10, 30, 0, TimeSpan.Zero),
             source + ".bak", new string('a', 64), new Dictionary<string, string>());
+    }
+
+    /// <summary>Makes the pool a format-2 pool, as the helper writes it (design D2).</summary>
+    private void UseFormat2()
+    {
+        _credentialsLine = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsLine;
+    }
+
+    private void AddVersion(string name, string source, string stamp = "20261201T090000000Z")
+    {
+        AddImage(name, source);
+        _catalogs[name] = Format2Pool.Catalog(name, Format2Pool.VersionId(name, stamp));
     }
 
     private void AddBranch(string name, string image) =>
@@ -390,4 +438,226 @@ public sealed class ImageListRemoveTests
         Assert.Equal(0, json.Exit);
         Assert.Empty(json.Json.GetProperty("image").GetProperty("branches").EnumerateArray());
     }
+
+    // ---- format 2: the per-name catalog (task 3.3) ----
+
+    [Fact]
+    public void On_a_format_2_pool_the_list_reads_each_catalog_and_shows_the_version_of_each_row()
+    {
+        UseFormat2();
+        AddVersion("shop", "Shop");
+        AddImage("legacy", "Legacy");
+
+        var text = _world.Run("image", "list");
+        var json = Json("image", "list");
+
+        Assert.Equal(0, json.Exit);
+        var images = json.Json.GetProperty("images").EnumerateArray().ToList();
+        Assert.All(images, i => Assert.True(i.GetProperty("catalogReadable").GetBoolean()));
+        Assert.Equal(["legacy", "shop"], images.Select(i => i.GetProperty("name").GetString()!).ToArray());
+        Assert.Equal("shop@20261201T090000000Z", images.Single(i => i.GetProperty("name").GetString() == "shop").GetProperty("version").GetString());
+        Assert.Equal(JsonValueKind.Null, images.Single(i => i.GetProperty("name").GetString() == "legacy").GetProperty("version").ValueKind);
+        Assert.Contains("VERSION", text.Out, StringComparison.Ordinal);
+        Assert.Contains("shop@20261201T090000000Z", text.Out, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void On_a_format_1_pool_the_list_has_version_null_and_the_0_2_2_columns_even_when_a_catalog_is_there()
+    {
+        AddImage("shop", "Shop");
+        _catalogs["shop"] = Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"));
+
+        var text = _world.Run("image", "list");
+        var json = Json("image", "list");
+
+        Assert.Equal(JsonValueKind.Null, json.Json.GetProperty("images")[0].GetProperty("version").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.Json.GetProperty("images")[0].GetProperty("catalogReadable").ValueKind);
+        Assert.DoesNotContain("VERSION", text.Out, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_name_whose_catalog_has_no_current_version_does_not_exist_and_an_unreadable_catalog_is_listed()
+    {
+        UseFormat2();
+        AddImage("gone", "Gone");
+        _catalogs["gone"] = Format2Pool.Catalog("gone", null);
+        AddImage("broken", "Broken");
+        _catalogs["broken"] = "{not json";
+        AddVersion("shop", "Shop");
+
+        var json = Json("image", "list");
+
+        Assert.Equal(["broken", "shop"], json.Json.GetProperty("images").EnumerateArray().Select(i => i.GetProperty("name").GetString()!).ToArray());
+        Assert.False(json.Json.GetProperty("images")[0].GetProperty("catalogReadable").GetBoolean());
+    }
+
+    [Fact]
+    public void The_listing_script_never_sends_the_credentials_file_through_stdout()
+    {
+        Assert.DoesNotContain("base64 -w0 /pool/engine/credentials.json", ImageCatalog.ListingScript, StringComparison.Ordinal);
+        _credentialsLine = """{"format":2,"engine":{"user":"sa","password":"SENTINEL-PASSWORD"}}""";
+        _world.Host.CredentialsJson = _credentialsLine;
+
+        var listing = Listing();
+
+        Assert.Contains("SQLBRANCH_POOLCRED|2", listing, StringComparison.Ordinal);
+        Assert.DoesNotContain("SENTINEL", listing, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_catalog_whose_dir_leaves_the_image_folder_is_an_unreadable_catalog()
+    {
+        UseFormat2();
+        AddImage("shop", "Shop");
+        var id = Format2Pool.VersionId("shop");
+        _catalogs["shop"] = new ImageCatalogFile("shop", id, [new ImageVersionRef(id, "../..")]).ToJson();
+        AddVersion("ok", "Ok");
+
+        var json = Json("image", "list");
+
+        Assert.Equal(["ok", "shop"], json.Json.GetProperty("images").EnumerateArray().Select(i => i.GetProperty("name").GetString()!).ToArray());
+        Assert.False(json.Json.GetProperty("images")[1].GetProperty("catalogReadable").GetBoolean());
+    }
+
+    [Fact]
+    public void A_pool_format_above_2_makes_the_list_exit_1_with_operation_failed()
+    {
+        _credentialsLine = """{"format":3,"engine":{"user":"sa","password":"x"}}""";
+
+        var json = Json("image", "list");
+
+        Assert.Equal(1, json.Exit);
+        Assert.Equal("operation_failed", Code(json.Json));
+        Assert.Contains("format 3", Message(json.Json), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Remove_on_a_format_2_pool_removes_the_name_and_reports_the_version_ids()
+    {
+        UseFormat2();
+        AddVersion("crm", "Crm");
+
+        var rm = Json("image", "rm", "crm");
+        var list = Json("image", "list");
+
+        Assert.Equal(0, rm.Exit);
+        Assert.Equal(["crm@20261201T090000000Z"], rm.Json.GetProperty("image").GetProperty("versions").EnumerateArray().Select(v => v.GetString()!).ToArray());
+        Assert.Empty(list.Json.GetProperty("images").EnumerateArray());
+    }
+
+    [Fact]
+    public void Remove_on_a_format_1_pool_reports_no_versions()
+    {
+        AddImage("crm", "Crm");
+
+        var rm = Json("image", "rm", "crm");
+
+        Assert.Equal(0, rm.Exit);
+        Assert.Equal(0, rm.Json.GetProperty("image").GetProperty("versions").GetArrayLength());
+    }
+
+    [Fact]
+    public void Remove_of_an_image_an_older_client_wrote_reports_no_versions()
+    {
+        UseFormat2();
+        AddImage("crm", "Crm");
+
+        var rm = Json("image", "rm", "crm");
+
+        Assert.Equal(0, rm.Exit);
+        Assert.Equal(0, rm.Json.GetProperty("image").GetProperty("versions").GetArrayLength());
+        Assert.Empty(Json("image", "list").Json.GetProperty("images").EnumerateArray());
+    }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void List_an_image_with_an_unreadable_catalog_and_status_names_the_repair(bool hasManifest)
+    {
+        UseFormat2();
+        if (hasManifest)
+        {
+            AddImage("crm", "Crm");
+        }
+        _catalogs["crm"] = "{not json";
+
+        var list = Json("image", "list");
+        Assert.Equal(0, list.Exit);
+        var row = Assert.Single(list.Json.GetProperty("images").EnumerateArray());
+        Assert.Equal("crm", row.GetProperty("name").GetString());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("version").ValueKind);
+        Assert.False(row.GetProperty("catalogReadable").GetBoolean());
+        Assert.Contains("catalog unreadable", _world.Run("image", "list").Out, StringComparison.Ordinal);
+        var status = Json("status");
+        Assert.Equal(1, status.Exit);
+        Assert.Contains("sqlbranch image rm crm", status.Json.GetProperty("mismatches")[0].GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Equal("{not json", _catalogs["crm"]);
+        Assert.False(Ran("mv -T"));
+    }
+
+    [Fact]
+    public void Export_of_an_image_with_an_unreadable_catalog_exits_1_operation_failed_naming_image_rm_and_writes_no_file()
+    {
+        UseFormat2();
+        AddImage("crm", "Crm");
+        _catalogs["crm"] = "{not json";
+        var destination = Path.Combine(Path.GetTempPath(), "unreadable-catalog-" + Guid.NewGuid().ToString("N") + ".sbimg");
+        _world.Directories.Add(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar));
+
+        var export = Json("image", "export", "crm", "--to", destination);
+
+        Assert.Equal(1, export.Exit);
+        Assert.Equal("operation_failed", Code(export.Json));
+        Assert.Contains("sqlbranch image rm crm", Message(export.Json), StringComparison.Ordinal);
+        Assert.False(File.Exists(destination));
+    }
+
+    [Fact]
+    public void Remove_an_image_with_an_unreadable_catalog_reports_no_versions_and_keeps_the_mark()
+    {
+        UseFormat2();
+        AddImage("crm", "Crm");
+        _catalogs["crm"] = "{not json";
+
+        var removed = Json("image", "rm", "crm");
+        Assert.Equal(0, removed.Exit);
+        Assert.Empty(removed.Json.GetProperty("image").GetProperty("versions").EnumerateArray());
+        Assert.Empty(Json("image", "list").Json.GetProperty("images").EnumerateArray());
+        Assert.DoesNotContain(_scripts.Where(s => s != ImageCatalog.ListingScript), s => s.Contains("/pool/images/.ids", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void Image_list_and_export_with_unreadable_credentials_refuse_format_2_content(bool ids, bool catalog)
+    {
+        _credentialsLine = "{not json";
+        _world.Host.CredentialsJson = _credentialsLine;
+        _hasIds = ids;
+        AddImage("shop", "Shop");
+        if (catalog)
+        {
+            _catalogs["shop"] = Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"));
+        }
+
+        var list = Json("image", "list");
+        Assert.Equal(ids || catalog ? 1 : 0, list.Exit);
+        if (ids || catalog)
+        {
+            var text = _world.Run("image", "list");
+            Assert.Equal(1, text.Exit);
+            Assert.DoesNotContain("shop", text.Out, StringComparison.Ordinal);
+            Assert.DoesNotContain("NAME", text.Out, StringComparison.Ordinal);
+            _world.Directories.Add(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar));
+            var export = Json("image", "export", "shop", "--to", Path.Combine(Path.GetTempPath(), "unreadable-credentials.sbimg"));
+            foreach (var result in new[] { list, export })
+            {
+                Assert.Equal(1, result.Exit);
+                Assert.Equal("operation_failed", Code(result.Json));
+                Assert.Equal($"The engine credentials file in {FakeInitHost.PoolDir} is not valid.", Message(result.Json));
+                Assert.False(result.Json.TryGetProperty("images", out _));
+            }
+        }
+    }
+
 }

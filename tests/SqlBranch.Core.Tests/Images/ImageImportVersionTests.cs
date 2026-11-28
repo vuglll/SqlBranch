@@ -1,0 +1,85 @@
+using SqlBranch.Core.Tests.Fakes;
+
+namespace SqlBranch.Core.Tests.Images;
+
+/// <summary>Task 3.5: an import publishes its first version through the catalog on a format-2 pool, after sealing.</summary>
+public sealed partial class ImageImportTests
+{
+    private sealed class SetClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    [Fact]
+    public async Task Import_during_an_unfinished_upgrade_is_refused_before_any_write()
+    {
+        Format2Pool.Apply(_world, SqlBranch.Core.Engine.UpgradeRecord.Running);
+        var error = await Assert.ThrowsAsync<SqlBranch.Core.SqlBranchException>(async () => await ImportAsync(await ValidAsync()));
+        Assert.Equal(SqlBranch.Core.Output.ErrorCodes.PoolUpgradeRequired, error.Code);
+        Assert.Contains("sqlbranch pool upgrade --yes", error.Message, StringComparison.Ordinal);
+        Assert.False(Ran("mkdir"));
+        Assert.False(Ran("base64 -d"));
+    }
+
+    [Fact]
+    public async Task On_a_format_2_pool_an_import_publishes_a_local_version_id_after_the_manifest()
+    {
+        Format2Pool.Apply(_world);
+        _world.Clock = new SetClock(new DateTimeOffset(2026, 12, 1, 2, 0, 0, TimeSpan.Zero));
+
+        var result = await ImportAsync(await ValidAsync());
+
+        Assert.Equal("shop2@20261201T020000000Z", result.Version);
+        var manifest = _timeline.FindIndex(l => l.Contains("base64 -d > '/pool/images/shop2/manifest.json'", StringComparison.Ordinal));
+        var id = _timeline.FindIndex(l => l.Contains("/pool/images/.ids/shop2.new", StringComparison.Ordinal));
+        var catalog = _timeline.FindIndex(l => l.Contains("catalog.json.new", StringComparison.Ordinal));
+        var cleanup = _timeline.FindIndex(l => l.Contains("rm -rf '/pool/build/abc123def456'", StringComparison.Ordinal));
+        Assert.True(manifest >= 0 && manifest < id && id < catalog && catalog < cleanup);
+        // The archive's manifest is not changed by the version: the name is the only difference.
+        Assert.Equal(_manifest.ToJson().Replace("\"shop\",", "\"shop2\",", StringComparison.Ordinal), result.Manifest.ToJson());
+    }
+
+    [Fact]
+    public async Task On_a_format_1_pool_an_import_has_no_version_and_writes_no_catalog()
+    {
+        var result = await ImportAsync(await ValidAsync());
+
+        Assert.Null(result.Version);
+        Assert.False(Ran(".ids"));
+        Assert.False(Ran("catalog.json"));
+    }
+
+    [Fact]
+    public async Task A_failed_catalog_write_fails_the_import_and_removes_the_image_folder_it_made()
+    {
+        Format2Pool.Apply(_world);
+        _failScript = s => s.Contains("catalog.json.new", StringComparison.Ordinal) && s.Contains("base64", StringComparison.Ordinal);
+
+        await FailsAsync(await ValidAsync());
+
+        Assert.True(Ran("rm -rf '/pool/images/shop2'"));
+    }
+
+    [Theory]
+    [InlineData(SqlBranch.Core.Engine.UpgradeRecord.Done, true)]
+    [InlineData(SqlBranch.Core.Engine.UpgradeRecord.Running, false)]
+    public async Task An_import_that_began_on_format_1_publishes_by_the_format_it_reads_just_before_it_publishes(string state, bool catalog)
+    {
+        var previous = _world.Runtime.ExecHandler;
+        _world.Runtime.ExecHandler = (container, command) =>
+        {
+            if (command.Count >= 3 && command[2].Contains("base64 -d > '/pool/images/shop2/manifest.json'", StringComparison.Ordinal))
+            {
+                Format2Pool.Apply(_world, state);
+            }
+
+            return previous(container, command);
+        };
+
+        var result = await ImportAsync(await ValidAsync());
+
+        Assert.Equal(catalog, result.Version is not null);
+        Assert.Equal(catalog, Ran("catalog.json.new"));
+        Assert.Equal(catalog, Ran("/pool/images/.ids/shop2.new"));
+    }
+}

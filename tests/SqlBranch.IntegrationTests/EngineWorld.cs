@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.Json;
 using SqlBranch.Cli;
 using SqlBranch.Core;
 using SqlBranch.Core.Containers;
@@ -25,14 +26,28 @@ public sealed class EngineWorld : IAsyncDisposable
     /// <summary>Set to <c>plain</c> to run the suite on a pool without reflink: every world then uses a plain folder of the client.</summary>
     public const string PoolBackendVariable = "SQLBRANCH_IT_POOL_BACKEND";
 
+    public const string PoolFormatVariable = "SQLBRANCH_IT_POOL_FORMAT";
+
+    /// <summary>The requested fixture format; reject typos rather than silently testing the wrong format.</summary>
+    public static int RequestedPoolFormat => System.Environment.GetEnvironmentVariable(PoolFormatVariable) switch
+    {
+        null or "1" => 1,
+        "2" => 2,
+        _ => throw new InvalidOperationException($"{PoolFormatVariable} must be 1 or 2 (default: 1)."),
+    };
+
     private readonly HostPoolDirectory? _plainDirectory;
+    private readonly int _poolFormat;
+    private bool _poolFormatApplied;
 
     /// <param name="poolSize">The size of the managed pool file; unused for a plain pool.</param>
     /// <param name="plain">
     /// <c>null</c> follows <see cref="PoolBackendVariable"/>; <c>false</c> always uses the managed loop-xfs pool, for a test that is about it.
     /// </param>
-    public EngineWorld(string poolSize = "2GB", bool? plain = null)
+    /// <param name="keepFormat1">Keep a dedicated legacy pool for a test whose scenario requires format 1.</param>
+    public EngineWorld(string poolSize = "2GB", bool? plain = null, bool keepFormat1 = false)
     {
+        _poolFormat = keepFormat1 ? 1 : RequestedPoolFormat;
         Id = DockerHost.NewId();
         EngineName = $"sqlbranch-it-engine-{Id}";
         PoolVolume = $"sqlbranch-it-pool-{Id}";
@@ -112,7 +127,33 @@ public sealed class EngineWorld : IAsyncDisposable
         using var stderr = new StringWriter();
         var clock = Stopwatch.StartNew();
         var exit = CliApp.CreateDefault(Redactor, services).Run(args, stdout, stderr);
-        return (exit, stdout.ToString(), stderr.ToString(), clock.Elapsed);
+        var result = (exit, stdout.ToString(), stderr.ToString(), clock.Elapsed);
+        // All fixtures and standalone worlds initialize through this path. Keep the init output
+        // intact, and upgrade before returning control to any setup code that seeds the pool.
+        if (exit == 0 && args.FirstOrDefault() == "init" && !_poolFormatApplied)
+        {
+            if (_poolFormat == 2)
+            {
+                var upgrade = RunCli("pool", "upgrade", "--yes");
+                Assert.True(upgrade.Exit == 0,
+                    $"{PoolFormatVariable}=2: fixture pool upgrade --yes exited {upgrade.Exit}: {upgrade.Out}{upgrade.Err}");
+                var status = RunCli("status", "--format", "json");
+                Assert.True(status.Exit == 0,
+                    $"{PoolFormatVariable}=2: fixture status exited {status.Exit}: {status.Out}{status.Err}");
+                using var json = JsonDocument.Parse(status.Out);
+                Assert.True(json.RootElement.TryGetProperty("poolFormat", out var format)
+                    && format.ValueKind == JsonValueKind.Number && format.TryGetInt32(out var value) && value == 2,
+                    $"{PoolFormatVariable}=2: fixture status did not report poolFormat 2: {status.Out}");
+            }
+
+            _poolFormatApplied = true;
+        }
+        else if (exit == 0 && args.FirstOrDefault() == "teardown")
+        {
+            _poolFormatApplied = false;
+        }
+
+        return result;
     }
 
     /// <summary>

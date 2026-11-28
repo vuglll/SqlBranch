@@ -24,7 +24,11 @@ public sealed class ImageExportTests : IDisposable
     private readonly byte[] _data = new byte[1_500_000];
     private readonly byte[] _log = new byte[300_000];
     private readonly ImageManifest _manifest;
+
     private bool _imageExists = true;
+    private string? _credentialsJson;
+    private string? _catalogJson;
+    private string? _versionDirectory;
 
     /// <summary>Scripts what the engine's tar delivers.</summary>
     private Func<CancellationToken, FakeStreamingProcess> _tar;
@@ -42,10 +46,50 @@ public sealed class ImageExportTests : IDisposable
 
         _world.WithEngine();
         _world.Runtime.ExecHandler = (_, command) =>
-            command.Count >= 3 && command[2] == ImageCatalog.ListingScript
-                ? FakeContainerRuntime.Ok(_imageExists ? $"SQLBRANCH_IMAGE|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}" : string.Empty)
+            NoteScript(command) && command.Count >= 3 && command[2] == ImageCatalog.ListingScript
+                ? FakeContainerRuntime.Ok(string.Join('\n', new[]
+                {
+                    _credentialsJson is null ? null : $"SQLBRANCH_POOLCRED|{System.Text.Json.JsonDocument.Parse(_credentialsJson).RootElement.GetProperty("format").GetInt32()}",
+                    _catalogJson is null ? null : $"SQLBRANCH_CATALOG|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_catalogJson))}",
+                    _versionDirectory is null ? null : $"SQLBRANCH_VMANIFEST|shop|{_versionDirectory}|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}",
+                    _imageExists ? $"SQLBRANCH_IMAGE|shop|{Convert.ToBase64String(Encoding.UTF8.GetBytes(_manifest.ToJson()))}" : null,
+                }.Where(l => l is not null)))
                 : FakeContainerRuntime.Ok();
         _world.Runtime.StreamHandler = (_, _, _, token) => _tar(token);
+    }
+
+    [Fact]
+    public async Task Image_export_during_an_unfinished_upgrade_keeps_working()
+    {
+        _credentialsJson = Format2Pool.Credentials(UpgradeRecord.Running);
+        _world.Host.CredentialsJson = _credentialsJson;
+        _catalogJson = Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"));
+        var result = await Export(Dest());
+        Assert.Equal(2, result.Files);
+        await using (var reader = await ImageArchiveReader.OpenAsync(new MemoryStream(await File.ReadAllBytesAsync(Dest())), CancellationToken.None))
+        {
+            Assert.Equal(_manifest.ToJson(), reader.Head.Manifest.ToJson());
+        }
+        Assert.Equal(_credentialsJson, _world.Host.CredentialsJson);
+    }
+
+    private readonly List<string> _scripts = [];
+
+    private bool NoteScript(IReadOnlyList<string> command)
+    {
+        _scripts.Add(string.Join(' ', command));
+        return true;
+    }
+
+    [Fact]
+    public async Task Image_export_of_an_unadopted_image_does_not_adopt_it()
+    {
+        // A format-2 pool, an image with a manifest and no catalog (written by an older client after the upgrade).
+        _credentialsJson = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsJson;
+        var result = await Export(Dest());
+        Assert.Equal(2, result.Files);
+        Assert.DoesNotContain(_scripts, c => c.Contains("base64 -d >", StringComparison.Ordinal));
     }
 
     public void Dispose()
@@ -187,6 +231,45 @@ public sealed class ImageExportTests : IDisposable
         var command = Assert.Single(_world.Runtime.StreamExecs);
         Assert.Equal(["tar", "-C", "/pool/images/shop/data", "-cf", "-", "--", "shop.mdf", "shop_log.ldf"], command.Command);
         Assert.Equal(StreamDirection.Read, command.Direction);
+    }
+
+    [Fact]
+    public async Task On_a_format_2_pool_export_reads_the_current_version_of_the_name_from_its_catalog()
+    {
+        _credentialsJson = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsJson;
+        _catalogJson = Format2Pool.Catalog("shop", Format2Pool.VersionId("shop"));
+
+        var result = await Export(Dest());
+
+        Assert.Equal(2, result.Files);
+        Assert.Equal(["tar", "-C", "/pool/images/shop/data", "-cf", "-", "--", "shop.mdf", "shop_log.ldf"], Assert.Single(_world.Runtime.StreamExecs).Command);
+    }
+
+    [Fact]
+    public async Task Export_streams_the_data_folder_of_the_same_catalog_entry_as_the_manifest()
+    {
+        var id = Format2Pool.VersionId("shop", "20261203T020000000Z");
+        _credentialsJson = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsJson;
+        _versionDirectory = $"versions/{id}";
+        _catalogJson = new ImageCatalogFile("shop", id, [new ImageVersionRef(id, _versionDirectory)]).ToJson();
+
+        await Export(Dest());
+
+        Assert.Equal($"/pool/images/shop/versions/{id}/data", Assert.Single(_world.Runtime.StreamExecs).Command[2]);
+    }
+
+    [Fact]
+    public async Task On_a_format_2_pool_a_name_with_no_current_version_is_image_not_found()
+    {
+        _credentialsJson = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsJson;
+        _catalogJson = Format2Pool.Catalog("shop", null);
+
+        var ex = await Assert.ThrowsAsync<SqlBranchException>(() => Export(Dest()));
+
+        Assert.Equal(SqlBranch.Core.Output.ErrorCodes.ImageNotFound, ex.Code);
     }
 
     [Fact]
@@ -538,4 +621,26 @@ public sealed class ImageExportTests : IDisposable
         Assert.Equal("image_not_found", run.Json.GetProperty("error").GetProperty("code").GetString());
         Assert.False(File.Exists(Dest("n.sbimg")));
     }
+    [Fact]
+    public async Task Use_an_image_with_an_unreadable_catalog_refuses_export_before_creating_a_file()
+    {
+        _credentialsJson = Format2Pool.Credentials();
+        _world.Host.CredentialsJson = _credentialsJson;
+        _catalogJson = "{not json";
+        var error = await Assert.ThrowsAsync<SqlBranchException>(() => Export(Dest()));
+        Assert.Equal(ErrorCodes.OperationFailed, error.Code);
+        Assert.Contains("sqlbranch image rm shop", error.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(_folder));
+        Assert.Empty(_world.Runtime.Copies);
+    }
+
+    [Fact]
+    public async Task Unreadable_credentials_without_format_2_content_keep_the_legacy_export()
+    {
+        _world.Host.CredentialsJson = "{not json";
+        var result = await Export(Dest());
+        Assert.Equal("shop", result.Image);
+        Assert.True(File.Exists(Dest()));
+    }
+
 }

@@ -22,6 +22,9 @@ public sealed partial class BranchCreateTests
     private readonly List<string> _timeline = [];
 
     private bool _imageExists = true;
+
+    /// <summary>What the engine says about <c>catalog.json</c> of the image: <c>none</c> or the file as base64.</summary>
+    private string _catalogFile = "none";
     private long _freeBytes = 1L << 40;
     private string _branchState = "none";
     private int _userDatabases;
@@ -53,6 +56,18 @@ public sealed partial class BranchCreateTests
             if (_failScript?.Invoke(script) == true)
             {
                 return FakeContainerRuntime.Fail(1, "boom");
+            }
+
+            // A catalog the command wrote is the catalog a later read finds (adoption reads the image again).
+            if (script.Contains("catalog.json.new", StringComparison.Ordinal) &&
+                System.Text.RegularExpressions.Regex.Match(script, "printf %s '([A-Za-z0-9+/=]+)' \\| base64 -d > '/pool/images/[^']+/catalog\\.json\\.new'") is { Success: true } written)
+            {
+                _catalogFile = written.Groups[1].Value;
+            }
+
+            if (script.Contains("SQLBRANCH_CATALOGFILE=", StringComparison.Ordinal))
+            {
+                return FakeContainerRuntime.Ok("SQLBRANCH_CATALOGFILE=" + _catalogFile);
             }
 
             if (script.Contains("SQLBRANCH_MANIFEST=", StringComparison.Ordinal))
@@ -109,7 +124,7 @@ public sealed partial class BranchCreateTests
 
     private BranchRecord WrittenRecord()
     {
-        var script = _timeline.Single(l => l.Contains("base64 -d", StringComparison.Ordinal));
+        var script = _timeline.Single(l => l.Contains("base64 -d > '/pool/branches/", StringComparison.Ordinal));
         var b64 = RecordScript().Match(script).Groups["b64"].Value;
         return BranchRecord.FromJson(Encoding.UTF8.GetString(Convert.FromBase64String(b64)));
     }
@@ -231,7 +246,8 @@ public sealed partial class BranchCreateTests
         Create();
 
         var script = _timeline.Single(l => l.Contains("base64 -d", StringComparison.Ordinal));
-        Assert.Contains("> '/pool/branches/pr-142/branch.json'", script, StringComparison.Ordinal);
+        Assert.Contains("> '/pool/branches/pr-142/branch.json.new'", script, StringComparison.Ordinal);
+        Assert.Contains("mv -f '/pool/branches/pr-142/branch.json.new' '/pool/branches/pr-142/branch.json'", script, StringComparison.Ordinal);
         var json = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(RecordScript().Match(script).Groups["b64"].Value))).RootElement;
         Assert.Equal("shop", json.GetProperty("image").GetString());
         Assert.Equal("thin", json.GetProperty("cloneMode").GetString());

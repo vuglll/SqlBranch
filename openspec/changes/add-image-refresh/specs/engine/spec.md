@@ -1,37 +1,39 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: Status reports mismatches
-`sqlbranch status` SHALL list every branch folder with no attached database, every attached database with files in the branches area of the pool but no branch folder, the leftovers of a reset or image build that is no longer running, a `sqlbranch_build_<id>` login and a build's storage credential among them, and every image that was only partly removed, and SHALL exit with code 1 when it lists any. This includes abandoned unpublished versions, retired-version leftovers and reset workspaces.
-
-#### Scenario: Branch folder without a database
-- **WHEN** a branch folder `pr-7` exists in the pool but no database `pr-7` is attached
-- **THEN** `sqlbranch status` exits with code 1, lists `pr-7` as a mismatch and says the database is missing
-
-#### Scenario: User database is not a mismatch
-- **WHEN** a user created database `scratch` through the engine connection, its files are outside the pool's branches area, and nothing else is out of place
-- **THEN** `sqlbranch status` exits with code 0 and does not list `scratch`
-
-#### Scenario: Build interrupted
-- **WHEN** the client running `sqlbranch image build shop` was killed during the restore
-- **THEN** `sqlbranch status` exits with code 1 and lists the build's staging folder, and its temporary database when one is left
-
-#### Scenario: Build still running
-- **WHEN** `sqlbranch image build shop` is restoring in another process and nothing else is out of place
-- **THEN** `sqlbranch status` exits with code 0 and shows the build as in progress
-
-#### Scenario: Reset interrupted
-- **WHEN** the client running `sqlbranch branch reset pr-142` was killed after the new files were prepared and before they were attached
-- **THEN** `sqlbranch status` exits with code 1 and lists the leftover reset files of `pr-142`
-
-#### Scenario: Login left by a killed build
-- **WHEN** the client running `sqlbranch image build shopdev --from-scripts db` was killed while a script ran, its temporary database and staging folder were removed by hand, and login `sqlbranch_build_7f3a` is left
-- **THEN** `sqlbranch status` exits with code 1 and lists login `sqlbranch_build_7f3a` as a build leftover
-- **AND** after `sqlbranch image build crm --from-bak crm.bak` exits with code 0, `sqlbranch status` exits with code 0
-
-#### Scenario: Credential left by a failed drop
-- **WHEN** the clone mode is `copy`, a URL build from `s3://172.17.0.5:9000/backups/shop.bak` exited with code 1 because dropping its credential failed (tested with a fake connector), and nothing else is out of place
-- **THEN** `sqlbranch status` exits with code 1 and lists credential `s3://172.17.0.5:9000/backups` as a build leftover without showing its secret
+### Requirement: Status reports interrupted version work
+On a pool that uses format 2, `sqlbranch status` SHALL also list, as mismatches with their kind and image name, the files of an unpublished version and of a removed or pruned version whose command is no longer running, and SHALL exit with code 1 when it lists any.
 
 #### Scenario: Interrupted version operations
-- **WHEN** the clone mode is `thin` or `copy` and an unpublished shop version, retired crm files and a dev1 reset workspace remain after their operations stopped
-- **THEN** status exits 1 and identifies each leftover by kind and path
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, and an unpublished version of shop and the files of a removed crm version remain after the commands that made them were killed
+- **THEN** `sqlbranch status` exits with code 1 and lists each leftover with its kind (unpublished version, removed version) and its image name
+
+#### Scenario: Publication still running
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 2, a replacement of shop is waiting to publish in another process, and nothing else is out of place
+- **THEN** `sqlbranch status` exits with code 0 and shows the build of shop as in progress
+
+### Requirement: Commands that need pool format 2
+On a pool that uses format 1, `image build --replace`, `image import --replace`, `image list --versions`, `image prune` and `branch reset --latest` MUST exit 3 with `error.code` "pool_upgrade_required", change nothing, and name `sqlbranch pool upgrade --yes` and that SqlBranch 0.2.x tools cannot use an upgraded pool. Exit-2 checks and the earlier environment errors SHALL come first.
+
+#### Scenario: Prune on a format-1 pool
+- **WHEN** the pool uses format 1 and the user runs `sqlbranch image prune --keep 1`
+- **THEN** the command exits with code 3, `error.code` is "pool_upgrade_required", the message names `sqlbranch pool upgrade --yes` and SqlBranch 0.2.x, and no file in the pool changes
+
+#### Scenario: Bad count beats the format check
+- **WHEN** the pool uses format 1 and the user runs `sqlbranch image prune --keep 0`
+- **THEN** the command exits with code 2 and `error.code` is "usage_error"
+
+#### Scenario: Stopped engine beats the format check
+- **WHEN** the pool uses format 1, the engine was stopped, and the user runs `sqlbranch branch reset dev1 --latest`
+- **THEN** the command exits with code 3 and `error.code` is "engine_stopped"
+
+#### Scenario: Replacement on a format-1 pool
+- **WHEN** the clone mode is `thin` or `copy`, the pool uses format 1 with image shop, and the user runs `sqlbranch image build shop --from-bak next.bak --replace`
+- **THEN** the command exits with code 3, `error.code` is "pool_upgrade_required", no restore runs, and `sqlbranch status --format json` still reports `poolFormat` 1
+
+### Requirement: Refresh options during an unfinished upgrade
+While a pool upgrade has not finished, `image build --replace`, `image import --replace`, `image prune` and `branch reset --latest` MUST exit 3 with `error.code` "pool_upgrade_required" like every other command that changes images or branches. `image list --versions` is a read and SHALL keep working, showing an image not catalogued yet with `version` null.
+
+#### Scenario: Versions during an unfinished upgrade
+- **WHEN** `sqlbranch pool upgrade --yes` was killed after it recorded `shop@20261201T090000000Z` and before it recorded crm, and the user runs `sqlbranch image list --versions --format json` and then `sqlbranch image prune --keep 1`
+- **THEN** the list exits with code 0 and shows shop with `shop@20261201T090000000Z` and crm with `version` null
+- **AND** the prune exits with code 3, `error.code` is "pool_upgrade_required", and the message names `sqlbranch pool upgrade --yes`

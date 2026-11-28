@@ -14,14 +14,14 @@ internal static class BranchFiles
     /// in thin mode, a plain <c>cp</c> in copy mode. The image's files are read-only and so would a clone be, so the branch's own files
     /// are made writable for the engine.
     /// </summary>
-    public static string CloneCommands(ImageManifest manifest, string image, CloneMode mode, string targetDirectory)
+    public static string CloneCommands(ImageManifest manifest, string image, CloneMode mode, string targetDirectory, string imageDirectory = ".")
     {
         var script = new StringBuilder();
         var cp = mode == CloneMode.Thin ? "cp --reflink=always --" : "cp --";
         foreach (var file in manifest.Files)
         {
             RequireSafeFileName(file.FileName, image);
-            var from = Quoting.Shell($"{ImagePaths.Data(image)}/{file.FileName}");
+            var from = Quoting.Shell($"{ImagePaths.Data(image, imageDirectory)}/{file.FileName}");
             var to = Quoting.Shell($"{targetDirectory}/{file.FileName}");
             script.Append(CultureInfo.InvariantCulture, $"{cp} {from} {to}; chmod 640 {to}; ");
         }

@@ -38,6 +38,7 @@ Use `sqlbranch branch reset <name>` between runs that need the original image da
 - Never run destructive SQL against a server other than the SqlBranch engine.
 - Reset or remove your branches when done.
 - Never weaken a test to hide a database problem.
+- Never run `sqlbranch pool upgrade` unless the user asked for it: it cannot be undone and stops SqlBranch 0.2.x tools.
 
 **Command reference**
 
@@ -45,4 +46,5 @@ Use `sqlbranch branch reset <name>` between runs that need the original image da
 - [engine](reference/engine.md)
 - [image](reference/image.md)
 - [branch](reference/branch.md)
+- [pool](reference/pool.md)
 - [skill](reference/skill.md)

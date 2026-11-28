@@ -26,14 +26,17 @@ public sealed class BranchResetter
     private readonly SecretRedactor _redactor;
     private readonly string _engineName;
     private readonly Func<string> _newId;
+    private readonly TimeProvider _time;
 
     public BranchResetter(
         IContainerRuntime runtime,
         IEngineConnector connector,
         SecretRedactor redactor,
         string engineName = ContainerLabels.EngineName,
-        Func<string>? newId = null)
+        Func<string>? newId = null,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
@@ -47,7 +50,9 @@ public sealed class BranchResetter
         // Before any SQL runs and before any file is touched.
         NameRules.ValidateBranch(name);
 
+        var commandStart = _time.GetUtcNow();
         await using var engine = await BranchEngine.OpenAsync(_runtime, _connector, _redactor, _engineName, pool, fallbackPort, cancellationToken).ConfigureAwait(false);
+        await engine.RequireWritableAsync(cancellationToken).ConfigureAwait(false);
         await engine.TakeBranchLockAsync(name, cancellationToken).ConfigureAwait(false);
 
         // The guard: a branch SqlBranch created has a branch.json. Nothing else is ever dropped or changed.
@@ -67,14 +72,42 @@ public sealed class BranchResetter
         var image = record.Image;
         if (!await EngineLocks.TryTakeSharedAsync(engine.Session, EngineLocks.Image(image), cancellationToken).ConfigureAwait(false))
         {
+            // An upgrade holds every existing image's lock while it waits (design D8): say so, not "being built or removed".
+            await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
+            // An image an older client wrote may have to be adopted by this command, which does not wait for the lock (design D7).
+            if (engine.PoolFormat >= 2 && record.BaseKnown is null &&
+                await ImageAdoption.BusyIfUnadoptedAsync(_runtime, _engineName, image, cancellationToken).ConfigureAwait(false) is { } busy)
+            {
+                throw busy;
+            }
+
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is building or removing the image '{image}'. Wait for it to finish, then run the command again.");
         }
 
-        var manifest = await engine.ReadManifestAsync(
-            image,
-            $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.",
-            cancellationToken).ConfigureAwait(false);
+        // The format may have changed since the first read (design D8); nothing has been changed yet.
+        await engine.RecheckFormatAsync(cancellationToken).ConfigureAwait(false);
+
+        // On format 2 the base is the version recorded at create (design D5); a removed or unknown base is refused here, before
+        // any connection is closed. On format 1 the base is the image.
+        string imageDirectory = ".";
+        string? version = null;
+        ImageVersionData? found = null;
+        ImageManifest manifest;
+        if (engine.PoolFormat >= 2)
+        {
+            found = await ReadBaseAsync(engine, name, record, cancellationToken).ConfigureAwait(false);
+            manifest = found.Manifest;
+            imageDirectory = found.Directory;
+            version = found.Id;
+        }
+        else
+        {
+            manifest = await engine.ReadManifestAsync(
+                image,
+                $"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset. The branch is unchanged. 'sqlbranch image list' shows the images.",
+                cancellationToken).ConfigureAwait(false);
+        }
 
         // 2. requireThin (exit 3), then room for a full copy (exit 1): both before any file is made. A branch that was made as a
         // full copy stays one and is exempt from requireThin, as it was at create.
@@ -95,12 +128,23 @@ public sealed class BranchResetter
                 $"A database named '{name}' exists on the engine but has no file under {BranchPaths.Branch(name)}, so it is not this branch's and SqlBranch will not drop it. Nothing was changed.");
         }
 
+        // An image an older client wrote after the upgrade gets its first version now (design D7): after every refusal above, so a
+        // refused command writes nothing, and before the first file is made. The base was bound against the version read earlier;
+        // adoption refuses when the image is no longer that one.
+        if (engine.PoolFormat >= 2 && version is null && record.BaseKnown is null)
+        {
+            var adopted = await ImageAdoption.AdoptAsync(_runtime, _engineName, engine.Session, image, found!, commandStart, cancellationToken).ConfigureAwait(false);
+            manifest = adopted.Manifest;
+            imageDirectory = adopted.Directory;
+            version = adopted.Id;
+        }
+
         // 3. Clone into next/. A leftover next/ of an earlier reset that died is debris: this command holds the branch lock.
         var next = BranchPaths.Next(name);
         try
         {
             await engine.ShellAsync(
-                $"set -e; rm -rf {Quoting.Shell(next)}; mkdir {Quoting.Shell(next)}; " + BranchFiles.CloneCommands(manifest, image, mode, next),
+                $"set -e; rm -rf {Quoting.Shell(next)}; mkdir {Quoting.Shell(next)}; " + BranchFiles.CloneCommands(manifest, image, mode, next, imageDirectory),
                 "cloning the image's files", cancellationToken).ConfigureAwait(false);
 
             // 4. The old database goes: connections are closed with a rollback and the drop deletes its files.
@@ -137,7 +181,7 @@ public sealed class BranchResetter
         // The branch is attached. A record that cannot be updated is a different failure from an attach that failed.
         try
         {
-            await engine.WriteRecordAsync(name, record with { CloneMode = CloneModeNames.Of(mode), State = null }, cancellationToken).ConfigureAwait(false);
+            await engine.WriteRecordAsync(name, record with { CloneMode = CloneModeNames.Of(mode), State = null, ImageVersion = version ?? record.ImageVersion, BaseKnown = version is null ? record.BaseKnown : true }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -146,7 +190,51 @@ public sealed class BranchResetter
                 $"'sqlbranch branch list' shows it as broken until the record is written. Run 'sqlbranch branch reset {name}' again to finish.");
         }
 
-        return new BranchCreateResult(name, image, mode, engine.Server, name, BranchCreator.LoginName);
+        return new BranchCreateResult(name, image, mode, engine.Server, name, BranchCreator.LoginName) { ImageVersion = version ?? record.ImageVersion };
+    }
+
+    /// <summary>
+    /// The version a format-2 branch is reset to: the recorded one, or, for a record no format-2 command has written (an older
+    /// client wrote it after the upgrade), the first version when the branch was created at or after the image's <c>builtAt</c>
+    /// (design D7). Adoption of an image an older client wrote is left to the caller, after its other refusals. A removed or unknown base is <c>image_not_found</c> and names the way out.
+    /// </summary>
+    private async Task<ImageVersionData> ReadBaseAsync(BranchEngine engine, string name, BranchRecord record, CancellationToken cancellationToken)
+    {
+        var image = record.Image;
+        string Refusal(string what) =>
+            $"{what} Branch '{name}' is unchanged. Remove it with 'sqlbranch branch rm {name}' and create a new one with 'sqlbranch branch create {name} --from {image}'.";
+
+        if (record.BaseKnown is null)
+        {
+            var current = await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, null, cancellationToken).ConfigureAwait(false)
+                ?? throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                    Refusal($"The image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset."));
+
+            // The version whose files are at the top of the image folder is the one a 0.2.2 record can mean.
+            if (current.Directory != "." || record.CreatedAt < current.Manifest.BuiltAt)
+            {
+                throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                    Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so that version no longer exists for this branch and the branch cannot be reset."));
+            }
+
+            return current;
+        }
+
+        if (record.BaseKnown == false)
+        {
+            throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                Refusal($"The version of the image '{image}' that branch '{name}' was created from is not known, so that version no longer exists for this branch and the branch cannot be reset."));
+        }
+
+        if (record.ImageVersion is null)
+        {
+            throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                Refusal($"The image '{image}' that branch '{name}' was created from was removed before the pool upgrade, so the version it was created from no longer exists and the branch cannot be reset."));
+        }
+
+        return await ImageCatalog.ReadVersionAsync(_runtime, _engineName, image, record.ImageVersion, cancellationToken).ConfigureAwait(false)
+            ?? throw new SqlBranchException(ErrorCodes.ImageNotFound,
+                Refusal($"The version {record.ImageVersion} of the image '{image}' that branch '{name}' was created from no longer exists, so the branch cannot be reset."));
     }
 
     private static async Task RemoveNextAsync(BranchEngine engine, string next)

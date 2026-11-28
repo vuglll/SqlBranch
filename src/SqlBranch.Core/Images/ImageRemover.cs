@@ -9,7 +9,11 @@ namespace SqlBranch.Core.Images;
 /// <summary>A removed image.</summary>
 /// <param name="Name">The image's name.</param>
 /// <param name="Branches">The branches that were created from it and keep their own files.</param>
-public sealed record ImageRemoval(string Name, IReadOnlyList<string> Branches);
+public sealed record ImageRemoval(string Name, IReadOnlyList<string> Branches)
+{
+    /// <summary>The version IDs removed with the name: from the catalog on a format-2 pool, empty on format 1 and for an image not adopted yet.</summary>
+    public IReadOnlyList<string> Versions { get; init; } = [];
+}
 
 /// <summary>
 /// <c>image rm</c> as design D5 describes it: the image folder is renamed to <c>.removing-&lt;name&gt;</c>
@@ -46,9 +50,10 @@ public sealed class ImageRemover
         NameRules.ValidateImage(name);
         var engine = ImageCatalog.RequireRunningEngine(pool);
 
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
@@ -56,12 +61,38 @@ public sealed class ImageRemover
         // The same lock a build of this name holds, so a removal and a build of one name cannot overlap.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(name), cancellationToken).ConfigureAwait(false))
         {
+            // A running upgrade holds every existing image's lock (design D6 step 2), so a busy lock may be the upgrade's.
+            // Read the credentials to tell: an unfinished upgrade refuses with its own text, and any other busy lock keeps the generic text below.
+            var current = await EngineCredentials.ReadThroughEngineAsync(_runtime, _engineName, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false);
+            // Whatever the lock's owner, an unfinished upgrade refuses the removal, as after the lock, unless the upgrade is dead and
+            // this name's catalog is unreadable (D13).
+            if (current is { Upgrade.State: UpgradeRecord.Running } &&
+                await UpgradeRefusesAsync(session, name, current, pool, cancellationToken).ConfigureAwait(false))
+            {
+                await PoolUpgradeGuard.RequireWritableAsync(current, session, cancellationToken).ConfigureAwait(false);
+            }
+
             throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"Another command is working on the image '{name}': a build or a removal is running. Wait for it to finish.");
         }
 
-        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken).ConfigureAwait(false);
-        var entry = listing.Images.FirstOrDefault(i => i.Name == name)
+        // The format and the fence are read again after the lock (design D8): the first read may be stale.
+        credentials = await EngineCredentials.ReadThroughEngineAsync(_runtime, _engineName, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+            ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
+                $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+
+        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, credentials).ConfigureAwait(false);
+        var found = listing.Images.FirstOrDefault(i => i.Name == name);
+
+        // D13 permits removing an unreadable catalog to unblock the upgrade's own repair path, but only when the upgrade is dead:
+        // while it runs, every write waits for it.
+        if (credentials.Upgrade is { State: UpgradeRecord.Running } &&
+            (found?.CatalogReadable != false || await PoolUpgradeGuard.IsLiveAsync(session, cancellationToken).ConfigureAwait(false)))
+        {
+            await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
+        }
+
+        var entry = found
             ?? throw new SqlBranchException(ErrorCodes.ImageNotFound, $"There is no image named '{name}'. 'sqlbranch image list' shows the images.");
 
         if (entry.Branches.Count > 0 && !force)
@@ -100,7 +131,14 @@ public sealed class ImageRemover
                 "'sqlbranch status' reports it. Delete that folder to finish.");
         }
 
-        return new ImageRemoval(name, entry.Branches);
+        return new ImageRemoval(name, entry.Branches) { Versions = entry.Versions };
+    }
+
+    private async Task<bool> UpgradeRefusesAsync(IEngineSession session, string name, CredentialsFile current, FoundPool pool, CancellationToken cancellationToken)
+    {
+        var listing = await new ImageCatalog(_runtime, _engineName).ListAsync(cancellationToken, pool.Location, current).ConfigureAwait(false);
+        return listing.Images.FirstOrDefault(i => i.Name == name)?.CatalogReadable != false ||
+            await PoolUpgradeGuard.IsLiveAsync(session, cancellationToken).ConfigureAwait(false);
     }
 
     private Task<ContainerResult> ExecAsync(string script, CancellationToken cancellationToken) =>

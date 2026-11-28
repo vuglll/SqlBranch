@@ -50,6 +50,10 @@ SQLBRANCH_IT=1 dotnet test tests/SqlBranch.IntegrationTests -c Release
 ```
 
 `SQLBRANCH_IT_POOL_BACKEND` selects the pool (`loop-xfs` or `plain`), and
+`SQLBRANCH_IT_POOL_FORMAT` selects `1` (default) or `2`; format `2` upgrades each
+test pool immediately after initialization and verifies its status before use.
+Run both formats with both pool backends. Upgrade-transition tests are skipped
+on format `2`, and dedicated legacy pools retain format `1`.
 `SQLBRANCH_IT_SQLPACKAGE` points the BACPAC tests at a SqlPackage executable.
 A full run on both pools takes one to two hours. CI runs the build and the unit
 tests on every pull request. The integration tests on both pools run on

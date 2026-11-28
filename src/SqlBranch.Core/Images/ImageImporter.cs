@@ -33,6 +33,9 @@ public sealed class ImportCancelledException : OperationCanceledException
 /// <param name="Mode">The pool's clone mode.</param>
 public sealed record ImageImportResult(ImageManifest Manifest, CloneMode Mode)
 {
+    /// <summary>The version ID of the imported image on a format-2 pool; null on format 1.</summary>
+    public string? Version { get; init; }
+
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
@@ -56,19 +59,22 @@ public sealed class ImageImporter
     private readonly SecretRedactor _redactor;
     private readonly string _engineName;
     private readonly Func<string> _newId;
+    private readonly TimeProvider _time;
 
     public ImageImporter(
         IContainerRuntime runtime,
         IEngineConnector connector,
         SecretRedactor redactor,
         string engineName = ContainerLabels.EngineName,
-        Func<string>? newId = null)
+        Func<string>? newId = null,
+        TimeProvider? time = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _redactor = redactor ?? throw new ArgumentNullException(nameof(redactor));
         _engineName = engineName;
         _newId = newId ?? (() => Guid.NewGuid().ToString("N")[..12]);
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>Runs after each step with the step's name. A test throws here to fail an import at a chosen step.</summary>
@@ -106,6 +112,14 @@ public sealed class ImageImporter
 
     private sealed class State(string id, string target, ImageArchiveReader archive)
     {
+        /// <summary>The pool format read with the credentials: 1 or 2.</summary>
+        public int PoolFormat { get; init; } = 1;
+
+        /// <summary>The pool and the engine's image, so the format can be read again just before the image is published (design D6 step 2).</summary>
+        public PoolLocation? Pool { get; init; }
+
+        public string EngineImage { get; init; } = string.Empty;
+
         public string Id { get; } = id;
 
         public string Target { get; } = target;
@@ -129,6 +143,9 @@ public sealed class ImageImporter
 
         public ImageManifest? Manifest { get; set; }
 
+        /// <summary>The version ID published on a format-2 pool.</summary>
+        public string? Version { get; set; }
+
         public bool Succeeded { get; set; }
 
         public IReadOnlyList<ArchiveFileChecksum> Computed { get; set; } = [];
@@ -151,12 +168,14 @@ public sealed class ImageImporter
             throw new SqlBranchException(ErrorCodes.EngineStopped, "The engine is stopped. Run 'sqlbranch engine start' to start it.");
         }
 
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
+        await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
 
         // An import and a build or another import of one name cannot both go on. The lock lasts as long as the session.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(targetName), cancellationToken).ConfigureAwait(false))
@@ -165,7 +184,10 @@ public sealed class ImageImporter
                 $"Another build or import of the image '{targetName}' is running. Wait for it to finish, or choose another name with --as.");
         }
 
-        var state = new State(_newId(), targetName, archive);
+        // The format may have changed since the first read (design D8); act on what it is now.
+        credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, engine.Image, pool.Location, session, cancellationToken).ConfigureAwait(false);
+
+        var state = new State(_newId(), targetName, archive) { PoolFormat = credentials.Format, Pool = pool.Location, EngineImage = engine.Image };
         // The build lock is what lets status tell a running import from a dead one: an import uses the build folder.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Build(state.Id), cancellationToken).ConfigureAwait(false))
         {
@@ -214,7 +236,7 @@ public sealed class ImageImporter
         }
 
         var mode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName).ConfigureAwait(false);
-        return new ImageImportResult(state.Manifest!, mode) { Warnings = state.Warnings };
+        return new ImageImportResult(state.Manifest!, mode) { Warnings = state.Warnings, Version = state.Version };
     }
 
     private async Task RunStepsAsync(IEngineSession session, State state, CancellationToken cancellationToken)
@@ -222,8 +244,7 @@ public sealed class ImageImporter
         var source = state.Source;
 
         // 1. The name is free. The check runs under the lock, so a build or import of the name cannot slip in.
-        var exists = await Shell($"if [ -e {Quoting.Shell(ImagePaths.Image(state.Target))} ]; then echo SQLBRANCH_EXISTS=yes; else echo SQLBRANCH_EXISTS=no; fi", "checking the image name", cancellationToken).ConfigureAwait(false);
-        if (exists.Contains("SQLBRANCH_EXISTS=yes", StringComparison.Ordinal))
+        if (await ImageCatalog.NameExistsAsync(_runtime, _engineName, state.Target, state.PoolFormat, cancellationToken).ConfigureAwait(false))
         {
             throw new SqlBranchException(ErrorCodes.ImageExists,
                 $"The image '{state.Target}' already exists. Import the archive under another name with --as <name>, or remove the image with 'sqlbranch image rm {state.Target}'.");
@@ -262,6 +283,14 @@ public sealed class ImageImporter
         state.Manifest = source with { Name = state.Target };
         await state.Sealer.WriteManifestAsync(state.Manifest, cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("manifest", cancellationToken).ConfigureAwait(false);
+
+        // On a finished format-2 pool the first version is published through the catalog, after the seal (design D3, D4). The format is
+        // read again here, as for a build (design D6 step 2, D7).
+        if (state.Pool is { } pool && await PoolUpgradeGuard.PublishesThroughCatalogAsync(_runtime, _engineName, state.EngineImage, pool, cancellationToken).ConfigureAwait(false))
+        {
+            state.Version = await ImageVersions.PublishAsync(_runtime, _engineName, state.Target, _time, cancellationToken).ConfigureAwait(false);
+            await StepDoneAsync("catalog", cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task StepDoneAsync(string step, CancellationToken cancellationToken)

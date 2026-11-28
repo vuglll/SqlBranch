@@ -101,6 +101,22 @@ public sealed class ImageImportCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task A_fence_written_between_the_first_read_and_the_image_lock_stops_the_import_before_any_write()
+    {
+        await WriteArchiveAsync();
+        _world.Connector.OnTakeLock = taken =>
+        {
+            if (taken == EngineLocks.Image("shop2")) { _world.Host.CredentialsJson = Format2Pool.Credentials(UpgradeRecord.Running); }
+        };
+
+        var run = Run("shop.sbimg", "--as", "shop2", "--format", "json");
+
+        Assert.Equal(3, run.Exit);
+        Assert.Equal("pool_upgrade_required", JsonDocument.Parse(run.Out).RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.DoesNotContain(_world.Connector.TakenLocks, l => l.StartsWith("sqlbranch:build:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Text_output_states_the_clone_mode_and_a_copy_pool_says_branches_copy_every_file()
     {
         _world.Host.EngineProbe = "copy";

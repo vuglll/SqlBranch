@@ -53,6 +53,9 @@ public sealed record ImageBuildRequest(
 /// <param name="Mode">The pool's clone mode.</param>
 public sealed record ImageBuildResult(ImageManifest Manifest, CloneMode Mode)
 {
+    /// <summary>The version ID of the published image on a format-2 pool; null on format 1.</summary>
+    public string? Version { get; init; }
+
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public IReadOnlyList<(string Name, TimeSpan Duration)> ScriptTimes { get; init; } = [];
 }
@@ -122,6 +125,12 @@ public sealed partial class ImageBuilder
     /// <summary>The state of one build, kept so a failure can undo exactly what the build did.</summary>
     private sealed class State(ImageBuildRequest request, string id)
     {
+        /// <summary>The pool format read with the credentials: 1 or 2.</summary>
+        public int PoolFormat { get; init; } = 1;
+
+        /// <summary>The pool, so the format can be read again just before the image is published (design D6 step 2).</summary>
+        public PoolLocation? Pool { get; init; }
+
         public ImageBuildRequest Request { get; } = request;
 
         public string Id { get; } = id;
@@ -171,6 +180,9 @@ public sealed partial class ImageBuilder
 
         public ImageManifest? Manifest { get; set; }
 
+        /// <summary>The version ID published on a format-2 pool.</summary>
+        public string? Version { get; set; }
+
         public BacpacProvenance? Bacpac { get; init; }
         public BacpacOwnership? Ownership { get; init; }
         public BacpacOperation? Operation { get; init; }
@@ -210,12 +222,14 @@ public sealed partial class ImageBuilder
             throw new SqlBranchException(ErrorCodes.EngineStopped, "The engine is stopped. Run 'sqlbranch engine start' to start it.");
         }
 
-        var password = await EngineCredentials.ReadAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
+        var credentials = await EngineCredentials.ReadFileAsync(_runtime, engine.Image, pool.Location, cancellationToken).ConfigureAwait(false)
             ?? throw new SqlBranchException(ErrorCodes.OperationFailed,
                 $"The engine credentials are missing from {pool.Location}. Run 'sqlbranch teardown --force' and 'sqlbranch init' to start again.");
+        var password = credentials.Password;
         _redactor.Register(password);
 
         await using var session = await _connector.ConnectAsync(EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)), password, cancellationToken).ConfigureAwait(false);
+        await PoolUpgradeGuard.RequireWritableAsync(credentials, session, cancellationToken).ConfigureAwait(false);
 
         // Two builds of one name cannot both go on. The lock lasts as long as the session.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Image(request.Name), cancellationToken).ConfigureAwait(false))
@@ -224,7 +238,10 @@ public sealed partial class ImageBuilder
                 $"Another build of the image '{request.Name}' is running. Wait for it to finish, or choose another name.");
         }
 
-        var state = new State(request, _newId()) { EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
+        // The format may have changed since the first read (design D8); act on what it is now.
+        credentials = await PoolUpgradeGuard.RecheckAsync(_runtime, _engineName, engine.Image, pool.Location, session, cancellationToken).ConfigureAwait(false);
+
+        var state = new State(request, _newId()) { PoolFormat = credentials.Format, Pool = pool.Location, EngineImage = engine.Image, Endpoint = EngineEndpoint.Loopback(EngineStarter.PortOf(engine, fallbackPort)) };
         // The build lock is what lets status tell a running build from a dead one.
         if (!await EngineLocks.TryTakeAsync(session, EngineLocks.Build(state.Id), cancellationToken).ConfigureAwait(false))
         {
@@ -263,7 +280,7 @@ public sealed partial class ImageBuilder
         }
 
         var mode = await CloneProbe.ProbeInEngineAsync(_runtime, cancellationToken, _engineName).ConfigureAwait(false);
-        return new ImageBuildResult(state.Manifest!, mode) { ScriptTimes = state.ScriptTimes, Warnings = state.Warnings };
+        return new ImageBuildResult(state.Manifest!, mode) { ScriptTimes = state.ScriptTimes, Warnings = state.Warnings, Version = state.Version };
     }
 
     private async Task RunStepsAsync(IEngineSession session, State state, CancellationToken cancellationToken)
@@ -271,8 +288,7 @@ public sealed partial class ImageBuilder
         var request = state.Request;
 
         // 1. The name is free. The check runs under the lock, so a second build of the name cannot slip in.
-        var exists = await ShellAsync($"if [ -e {Quoting.Shell(ImagePaths.Image(request.Name))} ]; then echo SQLBRANCH_EXISTS=yes; else echo SQLBRANCH_EXISTS=no; fi", "checking the image name", cancellationToken).ConfigureAwait(false);
-        if (exists.Contains("SQLBRANCH_EXISTS=yes", StringComparison.Ordinal))
+        if (await ImageCatalog.NameExistsAsync(_runtime, _engineName, request.Name, state.PoolFormat, cancellationToken).ConfigureAwait(false))
         {
             throw new SqlBranchException(ErrorCodes.ImageExists, $"The image '{request.Name}' already exists. Remove it with 'sqlbranch image rm {request.Name}' or choose another name.");
         }
@@ -311,6 +327,15 @@ public sealed partial class ImageBuilder
         // The manifest is written last: an image exists once it has one.
         await WriteManifestAsync(state, cancellationToken).ConfigureAwait(false);
         await StepDoneAsync("manifest", cancellationToken).ConfigureAwait(false);
+
+        // On a finished format-2 pool the first version is published through the catalog, after the seal (design D3, D4). The format is
+        // read again here: an upgrade may have started or finished since the build began, and an upgrade that is not finished leaves
+        // the image in the format-1 layout for a later command to adopt (design D6 step 2, D7).
+        if (state.Pool is { } pool && await PoolUpgradeGuard.PublishesThroughCatalogAsync(_runtime, _engineName, state.EngineImage, pool, cancellationToken).ConfigureAwait(false))
+        {
+            state.Version = await ImageVersions.PublishAsync(_runtime, _engineName, request.Name, _time, cancellationToken).ConfigureAwait(false);
+            await StepDoneAsync("catalog", cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task BuildBackupSourceAsync(IEngineSession session, State state, CancellationToken cancellationToken)

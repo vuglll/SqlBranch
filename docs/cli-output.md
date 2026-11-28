@@ -48,6 +48,8 @@ names the flag that supplies it, for example `--force`.
 | `error` | on failure | An object with `code` (stable, from the table below) and `message` (for people; may change). |
 | other fields | per command | The command's result, documented with each command. |
 
+Fields added by the pool format 2 change (`poolFormat`, `version`, `imageVersion`, `imageRemoved` and the like, documented with each command) are additive under `schemaVersion` 1: nothing is removed and no meaning changes. On a format-1 pool they are `null` or `[]`.
+
 On failure:
 
 ```json
@@ -121,6 +123,216 @@ of one `image list` entry with `branches` 0. A failed import exits 1 with `archi
 `image_exists`, `pool_full`, `storage_unreachable` (an `https://` or `s3://` source) or `operation_failed`; a source that cannot be read,
 a bad `--as`, a misused `--s3-region` or a missing or invalid storage secret exits 2.
 A newer build of the same major version is a warning on standard error and exit 0.
+
+## Status and the pool format
+
+`status` reports the pool format as `poolFormat` (an integer, in the JSON
+document next to `images` and `branches`) and as a `Pool format` line in text. The new fields of this release are
+additive under schemaVersion 1; on a format-1 pool they are null or `[]` (and `poolFormat` is 1), so that output stays
+compatible with 0.2.2. Examples of a running engine, with the unchanged lines left out:
+
+Format 1:
+
+```text
+Pool backend: loop-xfs
+Pool format: 1
+Clone mode: thin
+Mismatches: none
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": true, "poolFormat": 1, "images": 2, "branches": 1,
+  "inProgress": [], "mismatches": [] }
+```
+
+Format 2 (the exit code is 0):
+
+```text
+Pool format: 2
+Mismatches: none
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": true, "poolFormat": 2, "images": 2, "branches": 1,
+  "inProgress": [], "mismatches": [] }
+```
+
+Upgrade in progress. The upgrade lock is held, so `status` shows the upgrade, and its temporary credentials file, as
+in progress and exits 0:
+
+```text
+Pool format: 1
+In progress: pool upgrade is running
+Mismatches: none
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": true, "poolFormat": 1,
+  "inProgress": ["pool upgrade is running"], "mismatches": [] }
+```
+
+Upgrade not finished. The credentials say `running` and nobody holds the lock, or a temporary credentials file is left.
+The temporary files are named by full path. The catalog, version-ID and branch-record temporary files are listed only while the
+credentials say `running`, because ordinary writers use the same names.
+`status` exits 1 `mismatch` and names the rerun:
+
+```text
+Pool format: 2
+Mismatches: 2
+  pool upgrade: The pool upgrade did not finish. Commands that change images or branches are refused until it finishes. Run 'sqlbranch pool upgrade --yes' to finish it.
+  /pool/engine/credentials.json.new: The temporary file /pool/engine/credentials.json.new was left by a pool upgrade that did not finish. Run 'sqlbranch pool upgrade --yes' to remove it.
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": false, "poolFormat": 2,
+  "mismatches": [
+    { "kind": "pool_upgrade", "name": "pool upgrade", "message": "The pool upgrade did not finish. ..." },
+    { "kind": "upgrade_leftover", "name": "/pool/engine/credentials.json.new", "message": "The temporary file ... was left by a pool upgrade that did not finish. ..." }
+  ],
+  "error": { "code": "mismatch", "message": "status found 2 mismatches: pool upgrade (pool_upgrade); /pool/engine/credentials.json.new (upgrade_leftover)" } }
+```
+
+On a format-2 pool, an image whose `catalog.json` cannot be parsed is a mismatch of kind `image_catalog`, named by the image,
+and `status` exits 1 `mismatch`. The message names the repair, `sqlbranch image rm <name>`:
+
+```text
+Mismatches: 1
+  crm: The catalog of the image 'crm' is not valid. Run 'sqlbranch image rm crm' to remove it.
+```
+
+```json
+{ "schemaVersion": 1, "command": "status", "ok": false, "poolFormat": 2,
+  "mismatches": [
+    { "kind": "image_catalog", "name": "crm", "message": "The catalog of the image 'crm' is not valid. Run 'sqlbranch image rm crm' to remove it." }
+  ],
+  "error": { "code": "mismatch", "message": "status found 1 mismatch: crm (image_catalog)" } }
+```
+
+## Image list and image rm on both formats
+
+`image list` adds `catalogReadable`: true on format 2, false for an unreadable catalog, and null on format 1. An unreadable catalog has `version` null and is marked "catalog unreadable" in text.
+
+`image list` adds `version` to each image: the ID of the name's current version on a format-2 pool, null on a format-1
+pool and for an image an older client wrote after the upgrade and no command has adopted yet. `image rm` adds
+`image.versions`, the IDs removed with the name; it is `[]` on a format-1 pool and for an image with no catalog.
+
+```json
+{ "command": "image list", "ok": true,
+  "images": [ { "name": "shop", "version": null, "catalogReadable": null, "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
+```
+
+```json
+{ "command": "image list", "ok": true,
+  "images": [ { "name": "shop", "version": "shop@20261201T090000000Z", "catalogReadable": true, "branches": 1, "branchNames": ["dev1"], "...": "..." } ] }
+```
+
+The first document is a format-1 pool and the second a format-2 pool. In text the format-2 table has a `VERSION`
+column after `BRANCHES`; the format-1 table is the 0.2.2 table.
+
+```json
+{ "command": "image rm", "ok": true,
+  "image": { "name": "crm", "removed": true, "forced": false, "branches": [], "versions": [] } }
+```
+
+```json
+{ "command": "image rm", "ok": true,
+  "image": { "name": "crm", "removed": true, "forced": false, "branches": [], "versions": ["crm@20261201T090000000Z"] } }
+```
+
+Again the first is a format-1 pool and the second a format-2 pool.
+
+## Build, import and branch version fields
+
+`image build` and `image import` add `image.version`: the version ID on a format-2 pool, null on a format-1 pool.
+
+```json
+{ "command": "image build", "ok": true,
+  "image": { "name": "shop", "version": null, "cloneMode": "thin", "...": "..." } }
+```
+
+```json
+{ "command": "image import", "ok": true, "from": "shop.sbimg", "cloneMode": "thin",
+  "image": { "name": "shop3", "version": "shop3@20261201T090000000Z", "branches": 0, "...": "..." } }
+```
+
+The first document is a format-1 pool and the second a format-2 pool; `image build` on a format-2 pool has the same shape
+with an ID, for example `"version": "shop@20261201T020000000Z"`.
+
+`branch create` and `branch reset` add `branch.imageVersion`, and each `branch list` row adds `imageVersion`: the base version
+ID on a format-2 pool, null on a format-1 pool, for an unknown base and for a base removed before the upgrade. On a format-2
+pool `imageRemoved` is true when the base version is no longer in the name's catalog, also after the name was used again.
+
+```json
+{ "command": "branch create", "ok": true,
+  "branch": { "name": "dev2", "image": "shop", "imageVersion": "shop@20261201T090000000Z", "cloneMode": "thin", "...": "..." } }
+```
+
+```json
+{ "command": "branch reset", "ok": true,
+  "branch": { "name": "dev2", "image": "shop", "imageVersion": "shop@20261201T090000000Z", "cloneMode": "thin", "...": "..." } }
+```
+
+```json
+{ "command": "branch list", "ok": true,
+  "branches": [ { "name": "dev1", "image": "shop", "imageVersion": "shop@20261119T020000000Z", "imageRemoved": true, "state": "online", "...": "..." },
+                { "name": "dev0", "image": "shop", "imageVersion": null, "imageRemoved": false, "state": "online", "...": "..." } ] }
+```
+
+In text, an `Image version:` line follows the first line of `branch create` and `branch reset`, and the `IMAGE` column of
+`branch list` shows the version ID instead of the name, followed by `(removed)` when it was removed. A format-1 pool prints
+the 0.2.2 text.
+
+## Pool upgrade
+
+`sqlbranch pool upgrade --yes` moves a format-1 pool to format 2. `pool` is the new format and `previousFormat` the one
+before (2 when the pool was already upgraded, then nothing else changes and `images` is `[]`); `images` lists each image the
+upgrade processed with its first version ID, by name; `branches` names the branches by the base they got in three lists: `pinned`, `unknownBase` and `removedBase`. A completed rerun reports empty lists.
+
+```json
+{ "schemaVersion": 1, "command": "pool upgrade", "ok": true,
+  "pool": { "format": 2, "previousFormat": 1 },
+  "images": [ { "name": "crm", "version": "crm@20261201T090000000Z" },
+              { "name": "shop", "version": "shop@20261201T090000000Z" } ],
+  "branches": { "pinned": ["dev1"], "unknownBase": ["old1"], "removedBase": ["pr-9"] } }
+```
+
+```json
+{ "schemaVersion": 1, "command": "pool upgrade", "ok": true,
+  "pool": { "format": 2, "previousFormat": 2 }, "images": [],
+  "branches": { "pinned": [], "unknownBase": [], "removedBase": [] } }
+```
+
+The first document is a format-1 pool being upgraded at 2026-12-01T09:00:00.000Z and the second a rerun on a pool that is
+already format 2. The text output of the first run:
+
+```
+The pool now uses format 2 (it used format 1).
+Image crm: version crm@20261201T090000000Z
+Image shop: version shop@20261201T090000000Z
+Branches pinned to the first version: dev1
+Branches with an unknown base (they cannot be reset): old1
+Branches whose image was already removed (they cannot be reset): pr-9
+```
+
+and of the rerun: `The pool already uses format 2. Nothing was changed.` In text and in JSON format, an upgrade that is going to
+write prints one line on standard error before its first write:
+
+```
+warning: The pool upgrade cannot be undone. SqlBranch 0.2.x tools and SqlBranch.Testing 0.2.x packages can no longer use the pool after it.
+```
+
+While locks are busy, progress goes to standard error, for example:
+
+```text
+Waiting for image 'shop', branch 'dev4' before upgrading the pool.
+```
+
+The wait is bounded by `publishWait`; a timeout names every still-busy image and branch and asks for `sqlbranch pool upgrade --yes` again.
+
+The command exits 2 `usage_error` before any Docker command when `--yes` is missing, repeated or given a value, or when an
+operand or another option is given; 3 `not_initialized` or `engine_stopped` when there is no running engine; 1
+`catalog_busy` when another upgrade is running or an image or branch is still in use; 1 `pool_full` when the pool has no
+room (before the first write the pool stays format 1, afterwards `sqlbranch pool upgrade --yes` finishes it).
 
 ## Doctor output
 
@@ -203,4 +415,6 @@ Without an explicit path, Docker failure reports `docker_unavailable`.
 | `archive_corrupt` | 1 | An archive's SHA-256 or size differs from its checksum list, the checksum list is missing, or the archive ends early. The message names the file. |
 | `storage_unreachable` | 1 | `image export`, `image import` or a BACPAC build could not reach the storage at its `https://` or `s3://` URL, was refused its secret, did not trust its certificate, found no object, or could not finish reading it. The message has the URL without its query and the reason (never a secret). |
 | `mismatch` | 1 | `status` found state that does not match, such as a branch folder with no database. |
+| `catalog_busy` | 1 | A command waited `publishWait` for running image or branch operations and gave up, or met an operation it must not wait for. The message names what is busy. |
+| `pool_upgrade_required` | 3 | A pool upgrade did not finish, or the command needs pool format 2. The message names `sqlbranch pool upgrade --yes`. |
 | `operation_failed` | 1 | The operation failed for a reason with no more specific code. |
