@@ -4,8 +4,10 @@ Facts for the OpenSpec change `add-pool-format-upgrade`. The section on 0.2.2
 clients moved here from
 [2026-11-19-image-refresh-facts.md](2026-11-19-image-refresh-facts.md) when
 `add-image-refresh` was split on 2026-11-24. Only the source of release 0.2.2
-was examined while writing the proposal; 0.2.0 and 0.2.1 are run against an
-upgraded pool by task 5.1, which records their transcripts here.
+was examined while writing the proposal. Task 5.1 ran 0.2.0, 0.2.1 and
+0.2.2 against an upgraded pool and records their transcripts here. The
+2026-11-28 run also confirmed the source finding for 0.2.2 `engine start`
+with the engine stopped.
 
 ## Prerequisites (checked 2026-11-24 against docs/roadmap.md)
 
@@ -246,7 +248,10 @@ is settled only by task 5.1, which installs all three versions from NuGet
    (`EngineInitializer.cs` line 140) read the credentials themselves. So on an
    upgraded pool, 0.2.2 commands exit 1 with the credentials message only while
    the engine runs; with the engine stopped they report `engine_stopped` as
-   before, except `engine start` and `init`.
+   before, except `engine start` and `init`. The 2026-11-28 run below confirmed
+   that `engine start` fails with exit 1 `operation_failed` even with the
+   engine stopped, leaves it stopped and changes no pool files. `init` on
+   the existing pool was not run.
 3. **Build time in the manifest.** `ImageManifest` stores `builtAt`
    ([src/SqlBranch.Core/Images/ImageManifest.cs](../../src/SqlBranch.Core/Images/ImageManifest.cs),
    line 33). A build sets it from the client's clock, `_time.GetUtcNow()`
@@ -386,11 +391,57 @@ $ sqlbranch image list                  # exit 3, same message
 $ sqlbranch image export shop --to f    # exit 3, same message, no file written
 ```
 
+### Engine stopped, 0.2.2 `engine start` (run 2026-11-28)
+
+Same environment as above: macOS, Docker Desktop, loop-xfs pool, clone mode
+thin, engine `sqlbranch-engine` on 127.0.0.1:14330. The pool and the upgrade
+came from this build (HEAD 8c8f670, `dotnet publish -c Release`).
+
+Setup, this build:
+
+```
+$ sqlbranch init                                   # exit 0 (loop-xfs, thin)
+$ sqlbranch image build shop --from-scripts db     # exit 0
+$ sqlbranch branch create b1 --from shop           # exit 0
+$ sqlbranch pool upgrade --yes                     # exit 0
+Image shop: version shop@20261128T124324273Z
+Branches pinned to the first version: b1
+$ sqlbranch engine stop                            # exit 0
+```
+
+The container state was `exited`. Released 0.2.2 then failed in both formats:
+
+```
+$ sqlbranch engine start               # exit 1
+error: The engine credentials file in /var/lib/sqlbranch/mnt is not valid.
+$ sqlbranch engine start --format json # exit 1
+```
+
+The JSON had `ok: false`, `error.code` `operation_failed` and the same
+message. Afterwards the container was still `exited`, with the same
+`StartedAt` as before. The engine did not start. This confirms the source
+finding that `engine start` reads the credentials even with the engine
+stopped.
+
+SHA-256 hashes were taken for every pool file outside `engine/` while the
+engine was running before `engine stop`, and again after this build's
+`engine start` brought it back. The two lists were identical (9 hashed
+files): `credentials.json`, `images/.ids`, the shop catalog, manifest and
+data files, `branches/b1/branch.json`, and b1's data files by name.
+
+Only SQL Server's own files under `engine/` differed: system databases,
+logs and registry hives, from this build's restart. The error log rotated
+once, so the engine started once, from this build, not from 0.2.2.
+
+Cleanup used `teardown --force` from this build. No SqlBranch container or
+volume remained.
+
 ### Result
 
-- 0.2.0 and 0.2.1 behave exactly like 0.2.2 in every check above: same exit
-  codes, same code, same message text. The docs and release notes need no
-  per-version differences.
+- 0.2.0 and 0.2.1 behave exactly like 0.2.2 in every shared check from
+  2026-11-25: same exit codes, same code, same message text. The stopped-engine
+  `engine start` follow-up on 2026-11-28 checked 0.2.2 only. The docs and
+  release notes need no per-version differences.
 - Correction to point 4 above and to task 5.2's wording: `image list` and
   `image export` run on an upgraded pool only while the engine runs. With the
   engine stopped they exit 3 `engine_stopped` (as they did before the upgrade),

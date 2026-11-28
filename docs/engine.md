@@ -245,10 +245,11 @@ project to 0.3 or later; updating the tool does not update the package. SqlBranc
 message from create, and its availability check returns false, so tests that skip on that check are skipped silently
 (see [testing.md](testing.md#older-packages-on-an-upgraded-pool)).
 
-These tools fail this way only while the engine runs. With the engine stopped, a 0.2.x `branch list` exits 3
+With the engine stopped, a 0.2.x `branch list` exits 3
 `engine_stopped` ("The engine is stopped. Run 'sqlbranch engine start' to start it."), as it did before the upgrade, and
-so do `image list` and `image export`. By the 0.2.2 source `engine start` and `init` read the credentials themselves and
-fail with the message above even then; that case was not run.
+so do `image list` and `image export`. A 0.2.x `engine start` reads the credentials itself and fails with the message
+above even with the engine stopped (exit 1, `operation_failed`). The engine stays stopped and no pool file changes
+(checked with 0.2.2). By the 0.2.2 source, `init` on the existing pool does the same (not run).
 
 0.2.x `image list` and `image export` do not read the credentials, so they still run on an upgraded pool, but only while
 the engine runs. They read the files at the top of each image directory, which are the first version while it is kept,
