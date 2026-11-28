@@ -371,7 +371,9 @@ internal sealed class BranchKit(ImageEngineFixture fixture, ITestOutputHelper ou
             Assert.True(listed.GetProperty("imageRemoved").GetBoolean());
             Assert.Equal("online", listed.GetProperty("state").GetString());
             var table = World.RunCli("branch", "list").Out;
-            Assert.Contains("listimg (removed)", table, StringComparison.Ordinal);
+            // Format 2 names the image by the version the branch was made from.
+            var shown = listed.TryGetProperty("imageVersion", out var version) && version.ValueKind == JsonValueKind.String ? version.GetString() : "listimg";
+            Assert.Contains($"{shown} (removed)", table, StringComparison.Ordinal);
 
             if (mode == "thin")
             {

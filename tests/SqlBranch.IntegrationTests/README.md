@@ -13,6 +13,7 @@ Each test makes its own engine, port, pool folder and pool volume, and removes t
 | `SQLBRANCH_IT_AZURE_EXPORT_URL` (with `SQLBRANCH_AZURE_SAS_TOKEN`), `SQLBRANCH_IT_S3_EXPORT_URL` (with `SQLBRANCH_IT_S3_REGION` and the S3 keys) | Opt-in: a real location (an object that does not exist yet; the test never uses `--force`) for the export and import round trip of `ImageArchiveCloudOptInIntegrationTests`. |
 | `SQLBRANCH_IT_AZURE_URL`, `SQLBRANCH_AZURE_SAS_TOKEN` | Opt-in: a real Azure Blob backup URL and its SAS token. Only the cloud tests read them. |
 | `SQLBRANCH_IT_S3_URL`, `SQLBRANCH_IT_S3_REGION`, `SQLBRANCH_S3_ACCESS_KEY_ID`, `SQLBRANCH_S3_SECRET_ACCESS_KEY` | Opt-in: a real S3 backup URL, its region and keys. |
+| `SQLBRANCH_IT_POOL_FORMAT` | `1` (default) keeps today's format-1 initialization; `2` runs `pool upgrade --yes` immediately after each test pool is initialized, before seeding or tests, and requires exit 0 plus `status --format json` reporting `poolFormat: 2`. Other values fail setup. Run both formats with each pool backend. Upgrade-transition walks skip under `2`; dedicated legacy pools explicitly keep format 1. |
 | `SQLBRANCH_IT_POOL_BACKEND` | `plain` makes every test engine use a plain folder of the client (`poolBackend: plain`), a pool without reflink. Tests that check thin mode, or that are about the managed XFS pool, are then reported as skipped. Unset runs the default managed `loop-xfs` pool. |
 | `SQLBRANCH_IT_SQLPACKAGE` | Absolute path to a user-installed `sqlpackage` for the doctor and restricted BACPAC import checks. |
 

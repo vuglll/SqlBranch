@@ -74,7 +74,7 @@ public abstract class PoolFormatRecheckScenarios(ImageEngineFixture fixture, ITe
         return Median(times);
     }
 
-    [IntegrationFact]
+    [IntegrationFormat1Fact]
     public async Task Walk_other_commands_do_not_upgrade_then_throughput_then_list_and_export_on_format_2()
     {
         output.WriteLine("clone mode: " + await Kit.CloneModeAsync());
@@ -119,7 +119,7 @@ public abstract class PoolFormatRecheckScenarios(ImageEngineFixture fixture, ITe
         Json(World.RunCli("image", "export", "rcshop", "--to", archive, "--format", "json"));
 
         // The import goes to a genuinely fresh format-1 pool: a second engine of its own, never touched by an upgrade.
-        await using var fresh = new EngineWorld("4GB", plain: false);
+        await using var fresh = new EngineWorld("4GB", plain: false, keepFormat1: true);
         {
             Json(fresh.RunCli("init", "--format", "json"));
             Assert.Equal(1, Json(fresh.RunCli("status", "--format", "json")).GetProperty("poolFormat").GetInt32());

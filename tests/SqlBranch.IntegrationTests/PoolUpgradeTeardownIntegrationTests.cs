@@ -33,7 +33,7 @@ public sealed class PoolUpgradeTeardownIntegrationTests(ITestOutputHelper output
     public async Task Teardown_during_an_unfinished_upgrade()
     {
         SkipTestException.UnlessManagedRequested();
-        await using var world = new EngineWorld(plain: false);
+        await using var world = new EngineWorld(plain: false, keepFormat1: true);
         Json(world, "init");
         await SeedAsync(world);
         Assert.Equal("thin", Json(world, "status").GetProperty("pool").GetProperty("cloneMode").GetString());

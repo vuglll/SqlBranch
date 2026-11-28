@@ -119,7 +119,7 @@ public sealed class PoolUpgradeIntegrationTests(ImageEngineFixture fixture, ITes
         }
     }
 
-    [IntegrationFact]
+    [IntegrationFormat1Fact]
     public async Task A_format_1_pool_with_images_and_branches_upgrades_without_touching_data_and_reports_format_2()
     {
         await Kit.EnsureImageAsync("upshop");

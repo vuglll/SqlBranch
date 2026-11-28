@@ -45,7 +45,11 @@ public sealed partial class ImageBuildIntegrationTests
         Assert.Equal(0, text.Exit);
         var line = text.Out.Split('\n').Single(l => l.StartsWith("listed", StringComparison.Ordinal));
         Assert.Contains("Listed", line, StringComparison.Ordinal);
-        Assert.EndsWith("0", line.TrimEnd(), StringComparison.Ordinal);
+        // Format 2 adds a VERSION column after BRANCHES.
+        var branchesCell = listed.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String
+            ? line.TrimEnd()[..^version.GetString()!.Length].TrimEnd()
+            : line.TrimEnd();
+        Assert.EndsWith("0", branchesCell, StringComparison.Ordinal);
         Assert.Contains("BRANCHES", text.Out, StringComparison.Ordinal);
 
         // A branch folder that names the image is counted; one that names another image is not. A folder being removed is not an image.
