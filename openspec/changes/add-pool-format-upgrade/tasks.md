@@ -42,5 +42,5 @@ This group runs first after approval, on the maintainer's Linux machine, where D
 
 ## 6. Integration checks
 
-- [ ] 6.1 Run the existing unit and integration suites twice with Docker: once on a format-1 pool and once on a pool upgraded with `pool upgrade --yes` before the suite starts (a switch in the integration fixture). Verify: both runs green in both clone modes, apart from tests that assert format-1-only output, which are listed in the research note with the reason.
+- [x] 6.1 Run the existing unit and integration suites twice with Docker: once on a format-1 pool and once on a pool upgraded with `pool upgrade --yes` before the suite starts (a switch in the integration fixture). Verify: both runs green in both clone modes, apart from tests that assert format-1-only output, which are listed in the research note with the reason.
 - [ ] 6.2 From a clean tree run `dotnet clean`, `dotnet build -warnaserror`, `dotnet test` and, with Docker, `SQLBRANCH_IT=1 dotnet test`. Run `openspec validate add-pool-format-upgrade --strict` and `openspec validate --all --strict`. Verify: zero warnings, all tests green, both validations pass.
